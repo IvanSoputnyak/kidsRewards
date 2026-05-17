@@ -16,6 +16,7 @@ struct DashboardView: View {
                         RoundIconButton(systemImage: "plus") {
                             showingAddKid = true
                         }
+                        .accessibilityLabel("Add kid")
                     }
 
                     HStack(spacing: 12) {

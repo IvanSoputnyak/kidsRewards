@@ -19,10 +19,18 @@
 		A1000000000000000000000A /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* DesignSystem.swift */; };
 		A1000000000000000000000B /* RewardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* RewardStoreTests.swift */; };
 		A1000000000000000000000D /* ParentPINSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* ParentPINSecurity.swift */; };
+		B10000000000000000000001 /* KidsRewardsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* KidsRewardsUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		A11000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000000;
+			remoteInfo = KidsRewards;
+		};
+		B11000000000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A60000000000000000000000 /* Project object */;
 			proxyType = 1;
@@ -46,6 +54,8 @@
 		A2000000000000000000000B /* RewardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewardStoreTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* KidsRewardsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KidsRewardsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000000000000000000000D /* ParentPINSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/ParentPINSecurity.swift; sourceTree = "<group>"; };
+		B20000000000000000000000 /* KidsRewardsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KidsRewardsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000001 /* KidsRewardsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidsRewardsUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -63,6 +73,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B30000000000000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -71,6 +88,7 @@
 			children = (
 				A40000000000000000000001 /* KidsRewards */,
 				A40000000000000000000003 /* KidsRewardsTests */,
+				B40000000000000000000000 /* KidsRewardsUITests */,
 				A40000000000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -98,6 +116,7 @@
 			children = (
 				A20000000000000000000000 /* KidsRewards.app */,
 				A2000000000000000000000C /* KidsRewardsTests.xctest */,
+				B20000000000000000000000 /* KidsRewardsUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +127,14 @@
 				A2000000000000000000000B /* RewardStoreTests.swift */,
 			);
 			path = KidsRewardsTests;
+			sourceTree = "<group>";
+		};
+		B40000000000000000000000 /* KidsRewardsUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B20000000000000000000001 /* KidsRewardsUITests.swift */,
+			);
+			path = KidsRewardsUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -148,6 +175,24 @@
 			productReference = A2000000000000000000000C /* KidsRewardsTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B50000000000000000000000 /* KidsRewardsUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B90000000000000000000000 /* Build configuration list for PBXNativeTarget "KidsRewardsUITests" */;
+			buildPhases = (
+				B70000000000000000000000 /* Sources */,
+				B30000000000000000000000 /* Frameworks */,
+				B80000000000000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B12000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = KidsRewardsUITests;
+			productName = KidsRewardsUITests;
+			productReference = B20000000000000000000000 /* KidsRewardsUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -162,6 +207,10 @@
 						CreatedOnToolsVersion = 15.3;
 					};
 					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 15.3;
+						TestTargetID = A50000000000000000000000;
+					};
+					B50000000000000000000000 = {
 						CreatedOnToolsVersion = 15.3;
 						TestTargetID = A50000000000000000000000;
 					};
@@ -182,6 +231,7 @@
 			targets = (
 				A50000000000000000000000 /* KidsRewards */,
 				A50000000000000000000001 /* KidsRewardsTests */,
+				B50000000000000000000000 /* KidsRewardsUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -195,6 +245,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A80000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B80000000000000000000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -230,6 +287,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B70000000000000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000001 /* KidsRewardsUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -237,6 +302,11 @@
 			isa = PBXTargetDependency;
 			target = A50000000000000000000000 /* KidsRewards */;
 			targetProxy = A11000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		B12000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000000 /* KidsRewards */;
+			targetProxy = B11000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -458,6 +528,46 @@
 			};
 			name = Release;
 		};
+		B91000000000000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.KidsRewardsUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = KidsRewards;
+			};
+			name = Debug;
+		};
+		B91000000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.KidsRewardsUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = KidsRewards;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -484,6 +594,15 @@
 			buildConfigurations = (
 				A91000000000000000000004 /* Debug */,
 				A91000000000000000000005 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B90000000000000000000000 /* Build configuration list for PBXNativeTarget "KidsRewardsUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B91000000000000000000000 /* Debug */,
+				B91000000000000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

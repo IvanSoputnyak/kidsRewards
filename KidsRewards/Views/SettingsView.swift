@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var currencyPerPointText = ""
     @State private var interestRateText = ""
     @State private var allowancePointsText = ""
+    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
     @State private var parentPINText = ""
     @State private var approvalFlowEnabled = false
     @State private var saved = false
@@ -15,6 +16,11 @@ struct SettingsView: View {
     @State private var exportDocument = RewardStateDocument(data: Data())
     @State private var isExporting = false
     @State private var isImporting = false
+    @State private var pendingImportData: Data?
+    @State private var pendingImportPreview: ImportPreview?
+    @State private var cloudRestorePreview: ImportPreview?
+    @State private var showImportConfirmation = false
+    @State private var showRestoreConfirmation = false
     @State private var importMessage = ""
 
     var body: some View {
@@ -99,6 +105,18 @@ struct SettingsView: View {
                         saveSettings()
                         store.applyAllowanceToAllKids()
                     }
+
+                    Picker("Automatic allowance", selection: $allowanceRecurrence) {
+                        ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Automatic allowance recurrence")
+
+                    Text(allowanceStatusText)
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
                 }
 
                 SectionCard(title: "Parent Safety") {
@@ -117,12 +135,17 @@ struct SettingsView: View {
                     }
 
                     PillButton(
-                        title: pinSaved ? "PIN Saved" : (parentPINText.isEmpty ? "Remove PIN" : "Save PIN"),
-                        systemImage: parentPINText.isEmpty ? "lock.open.fill" : "lock.fill",
-                        tone: .subtle
+                        title: pinButtonTitle,
+                        systemImage: pinButtonSystemImage,
+                        tone: parentPINText.isEmpty && store.hasParentPIN ? .subtle : .primary,
+                        disabled: parentPINText.isEmpty && !store.hasParentPIN
                     ) {
                         saveParentPIN()
                     }
+
+                    Text(store.hasParentPIN ? "Parent PIN is active." : "No parent PIN is set.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
 
                     Toggle(isOn: $approvalFlowEnabled) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -191,8 +214,9 @@ struct SettingsView: View {
 
                     HStack(spacing: 10) {
                         Button("Sync to iCloud") {
-                            store.syncToICloud()
-                            importMessage = "Synced to iCloud key-value storage."
+                            importMessage = store.syncToICloud()
+                                ? "Synced to iCloud key-value storage."
+                                : "iCloud sync failed."
                         }
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
@@ -201,9 +225,12 @@ struct SettingsView: View {
                         .clipShape(Capsule())
 
                         Button("Restore iCloud") {
-                            importMessage = store.restoreFromICloud()
-                                ? "Restored from iCloud."
-                                : "No iCloud backup found."
+                            if let preview = store.iCloudBackupPreview() {
+                                cloudRestorePreview = preview
+                                showRestoreConfirmation = true
+                            } else {
+                                importMessage = "No iCloud backup found."
+                            }
                         }
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
@@ -217,6 +244,12 @@ struct SettingsView: View {
                         Text(importMessage)
                             .font(.caption)
                             .foregroundStyle(KidCoinTheme.mutedText)
+                    }
+
+                    if let persistenceError = store.persistenceErrorMessage {
+                        Text("Storage issue: \(persistenceError)")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.destructive)
                     }
                 }
 
@@ -248,15 +281,48 @@ struct SettingsView: View {
                     return
                 }
                 defer { url.stopAccessingSecurityScopedResource() }
-                if let data = try? Data(contentsOf: url), store.importStateData(data) {
-                    importMessage = "Imported backup."
-                    loadSettings()
+                if let data = try? Data(contentsOf: url) {
+                    if let preview = store.importPreview(from: data) {
+                        pendingImportData = data
+                        pendingImportPreview = preview
+                        showImportConfirmation = true
+                        importMessage = "Backup selected."
+                    } else {
+                        importMessage = "Import failed."
+                    }
                 } else {
                     importMessage = "Import failed."
                 }
             case .failure:
                 importMessage = "Import canceled."
             }
+        }
+        .confirmationDialog(
+            "Import Backup?",
+            isPresented: $showImportConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Replace Local Data", role: .destructive) {
+                importPendingBackup()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingImportData = nil
+                pendingImportPreview = nil
+            }
+        } message: {
+            Text(importConfirmationMessage)
+        }
+        .confirmationDialog(
+            "Restore iCloud Backup?",
+            isPresented: $showRestoreConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Replace Local Data", role: .destructive) {
+                restoreCloudBackup()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(restoreConfirmationMessage)
         }
     }
 
@@ -265,11 +331,48 @@ struct SettingsView: View {
         return Formatters.percent(rate)
     }
 
+    private var allowanceStatusText: String {
+        switch allowanceRecurrence {
+        case .none:
+            return "Allowance is manual only."
+        case .daily, .weekly:
+            let cadence = allowanceRecurrence.label.lowercased()
+            if let lastApplied = store.state.settings.lastAllowanceAppliedAt {
+                return "Allowance runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Allowance runs \(cadence) the next time the app opens."
+        }
+    }
+
+    private var pinButtonTitle: String {
+        if pinSaved { return "PIN Saved" }
+        if parentPINText.isEmpty {
+            return store.hasParentPIN ? "Remove PIN" : "No PIN Set"
+        }
+        return store.hasParentPIN ? "Update PIN" : "Set PIN"
+    }
+
+    private var pinButtonSystemImage: String {
+        if parentPINText.isEmpty {
+            return store.hasParentPIN ? "lock.open.fill" : "lock.slash"
+        }
+        return "lock.fill"
+    }
+
+    private var importConfirmationMessage: String {
+        previewMessage(for: pendingImportPreview, fallback: "This replaces all local data with the selected backup.")
+    }
+
+    private var restoreConfirmationMessage: String {
+        previewMessage(for: cloudRestorePreview, fallback: "This replaces all local data with the backup currently stored in iCloud key-value storage.")
+    }
+
     private func loadSettings() {
         currencyCode = store.state.settings.currencyCode
         currencyPerPointText = "\(store.state.settings.currencyPerPoint)"
         interestRateText = "\(store.state.settings.vaultInterestRate)"
         allowancePointsText = "\(store.state.settings.allowancePoints)"
+        allowanceRecurrence = store.state.settings.allowanceRecurrence
         parentPINText = ""
         approvalFlowEnabled = store.state.settings.approvalFlowEnabled
     }
@@ -279,7 +382,8 @@ struct SettingsView: View {
             currencyCode: currencyCode,
             currencyPerPoint: Decimal(string: currencyPerPointText) ?? store.state.settings.currencyPerPoint,
             vaultInterestRate: Decimal(string: interestRateText) ?? store.state.settings.vaultInterestRate,
-            allowancePoints: Int(allowancePointsText) ?? store.state.settings.allowancePoints
+            allowancePoints: Int(allowancePointsText) ?? store.state.settings.allowancePoints,
+            allowanceRecurrence: allowanceRecurrence
         )
         loadSettings()
         saved = true
@@ -295,6 +399,45 @@ struct SettingsView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             pinSaved = false
         }
+    }
+
+    private func importPendingBackup() {
+        guard let data = pendingImportData else { return }
+        pendingImportData = nil
+        pendingImportPreview = nil
+        if store.importStateData(data) {
+            importMessage = "Imported backup."
+            loadSettings()
+        } else {
+            importMessage = "Import failed."
+        }
+    }
+
+    private func restoreCloudBackup() {
+        if store.restoreFromICloud() {
+            importMessage = "Restored from iCloud."
+            cloudRestorePreview = nil
+            loadSettings()
+        } else {
+            importMessage = "No iCloud backup found."
+        }
+    }
+
+    private func previewMessage(for preview: ImportPreview?, fallback: String) -> String {
+        guard let preview else { return fallback }
+        var parts = [
+            "\(preview.kidsCount) kids",
+            "\(preview.tasksCount) chores",
+            "\(preview.transactionsCount) transactions",
+            "\(preview.approvalRequestsCount) approval requests"
+        ]
+        if let savedAt = preview.savedAt {
+            parts.append("saved \(savedAt.formatted(date: .abbreviated, time: .shortened))")
+        }
+        if let deviceName = preview.deviceName, !deviceName.isEmpty {
+            parts.append("from \(deviceName)")
+        }
+        return "This replaces all local data with: \(parts.joined(separator: ", "))."
     }
 
     private func kidName(for id: UUID) -> String {

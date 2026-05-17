@@ -16,15 +16,46 @@ final class KeychainParentPINManager: ParentPINManaging {
         let iterations: Int
         let salt: Data
         let hash: Data
+
+        init(version: Int = 1, iterations: Int = 1, salt: Data, hash: Data) {
+            self.version = version
+            self.iterations = iterations
+            self.salt = salt
+            self.hash = hash
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            iterations = try container.decodeIfPresent(Int.self, forKey: .iterations) ?? 1
+            salt = try container.decode(Data.self, forKey: .salt)
+            hash = try container.decode(Data.self, forKey: .hash)
+        }
+    }
+
+    private enum PayloadLookup {
+        case missing
+        case invalid
+        case found(Payload)
     }
 
     private let currentVersion = 2
     private let currentIterations = 120_000
-    private let service = "com.kidcoin-keeper.parent-pin"
-    private let account = "parent-pin"
+    private let service: String
+    private let account: String
+
+    init(service: String = "com.kidcoin-keeper.parent-pin", account: String = "parent-pin") {
+        self.service = service
+        self.account = account
+    }
 
     var hasPIN: Bool {
-        payload() != nil
+        switch payloadLookup() {
+        case .missing:
+            return false
+        case .invalid, .found:
+            return true
+        }
     }
 
     func save(pin: String) {
@@ -51,25 +82,39 @@ final class KeychainParentPINManager: ParentPINManaging {
     }
 
     func verify(pin: String) -> Bool {
-        guard let payload = payload() else { return true }
+        let payload: Payload
+        switch payloadLookup() {
+        case .missing:
+            return true
+        case .invalid:
+            return false
+        case .found(let savedPayload):
+            payload = savedPayload
+        }
+
         let iterations = max(payload.iterations, 1)
         let hash = payload.version >= 2
             ? stretchedHash(pin: pin, salt: payload.salt, iterations: iterations)
             : singleHash(pin: pin, salt: payload.salt)
-        return hash == payload.hash
+        return secureCompare(hash, payload.hash)
     }
 
-    private func payload() -> Payload? {
+    private func payloadLookup() -> PayloadLookup {
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else {
-            return nil
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status != errSecItemNotFound else { return .missing }
+        guard status == errSecSuccess, let data = item as? Data else {
+            return .invalid
         }
-        return try? JSONDecoder().decode(Payload.self, from: data)
+        do {
+            return .found(try JSONDecoder().decode(Payload.self, from: data))
+        } catch {
+            return .invalid
+        }
     }
 
     private func baseQuery() -> [String: Any] {
@@ -101,6 +146,15 @@ final class KeychainParentPINManager: ParentPINManaging {
             digest = Data(SHA256.hash(data: digest))
         }
         return digest
+    }
+
+    private func secureCompare(_ lhs: Data, _ rhs: Data) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        var difference: UInt8 = 0
+        for (left, right) in zip(lhs, rhs) {
+            difference |= left ^ right
+        }
+        return difference == 0
     }
 }
 

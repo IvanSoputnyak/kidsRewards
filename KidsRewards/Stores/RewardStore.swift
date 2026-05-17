@@ -3,9 +3,12 @@ import Foundation
 @MainActor
 final class RewardStore: ObservableObject {
     @Published private(set) var state: RewardState
+    @Published private(set) var persistenceErrorMessage: String?
 
     private let fileURL: URL
     private let pinManager: ParentPINManaging
+    private let cloudBackupKey = "kidsRewardsState.v2"
+    private let legacyCloudBackupKey = "kidsRewardsState"
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -29,9 +32,11 @@ final class RewardStore: ObservableObject {
            let decoded = try? decoder.decode(RewardState.self, from: data) {
             state = decoded
             migrateLegacyParentPINIfNeeded()
+            applyDueAllowanceIfNeeded()
         } else {
             state = initialState
             migrateLegacyParentPINIfNeeded()
+            applyDueAllowanceIfNeeded()
             save()
         }
     }
@@ -95,7 +100,8 @@ final class RewardStore: ObservableObject {
         save()
     }
 
-    func award(task: RewardTask, to kid: Kid) {
+    func award(task: RewardTask, to kid: Kid, at date: Date = Date()) {
+        guard isTaskAvailable(task, for: kid, now: date) else { return }
         updateKid(kid.id) { $0.availablePoints += task.points }
         addTransaction(
             kidID: kid.id,
@@ -104,7 +110,16 @@ final class RewardStore: ObservableObject {
             note: task.title,
             currencyAmount: nil
         )
+        updateTaskCompletion(task, for: kid, at: date)
         save()
+    }
+
+    func isTaskAvailable(_ task: RewardTask, for kid: Kid, now: Date = Date()) -> Bool {
+        guard task.recurrence != .none,
+              let completion = taskCompletion(for: task, kid: kid) else {
+            return true
+        }
+        return isDue(since: completion.lastAwardedAt, recurrence: task.recurrence, now: now)
     }
 
     func deposit(points: Int, for kid: Kid) {
@@ -125,8 +140,10 @@ final class RewardStore: ObservableObject {
         save()
     }
 
-    func cashOut(points: Int, for kid: Kid) {
-        guard points > 0 else { return }
+    @discardableResult
+    func cashOut(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var didCashOut = false
         updateKid(kid.id) { current in
             let amount = min(points, current.availablePoints)
             guard amount > 0 else { return }
@@ -138,12 +155,16 @@ final class RewardStore: ObservableObject {
                 note: "Cash out",
                 currencyAmount: Decimal(amount) * state.settings.currencyPerPoint
             )
+            didCashOut = true
         }
-        save()
+        if didCashOut {
+            save()
+        }
+        return didCashOut
     }
 
     func requestCashOut(points: Int, for kid: Kid) {
-        guard points > 0 else { return }
+        guard state.settings.approvalFlowEnabled, points > 0 else { return }
         let amount = min(points, kid.availablePoints)
         guard amount > 0 else { return }
         addApprovalRequest(
@@ -155,24 +176,35 @@ final class RewardStore: ObservableObject {
         save()
     }
 
-    func applyInterest(to kid: Kid) {
+    @discardableResult
+    func applyInterest(to kid: Kid) -> Bool {
+        let points = interestPoints(for: kid)
+        return applyInterest(points: points, to: kid)
+    }
+
+    @discardableResult
+    private func applyInterest(points: Int, to kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var didApplyInterest = false
         updateKid(kid.id) { current in
-            let interest = (Decimal(current.vaultPoints) * state.settings.vaultInterestRate)
-            let rounded = NSDecimalNumber(decimal: interest).rounding(accordingToBehavior: nil).intValue
-            guard rounded > 0 else { return }
-            current.vaultPoints += rounded
+            current.vaultPoints += points
             addTransaction(
                 kidID: kid.id,
                 kind: .interest,
-                points: rounded,
+                points: points,
                 note: "Vault interest",
                 currencyAmount: nil
             )
+            didApplyInterest = true
         }
-        save()
+        if didApplyInterest {
+            save()
+        }
+        return didApplyInterest
     }
 
     func requestInterest(for kid: Kid) {
+        guard state.settings.approvalFlowEnabled else { return }
         let points = interestPoints(for: kid)
         guard points > 0 else { return }
         addApprovalRequest(
@@ -270,7 +302,13 @@ final class RewardStore: ObservableObject {
         return true
     }
 
-    func updateSettings(currencyCode: String, currencyPerPoint: Decimal, vaultInterestRate: Decimal, allowancePoints: Int? = nil) {
+    func updateSettings(
+        currencyCode: String,
+        currencyPerPoint: Decimal,
+        vaultInterestRate: Decimal,
+        allowancePoints: Int? = nil,
+        allowanceRecurrence: RewardTask.Recurrence? = nil
+    ) {
         let normalizedCurrency = currencyCode
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
@@ -282,12 +320,14 @@ final class RewardStore: ObservableObject {
             currencyPerPoint: max(currencyPerPoint, 0),
             vaultInterestRate: max(vaultInterestRate, 0),
             approvalFlowEnabled: state.settings.approvalFlowEnabled,
-            allowancePoints: max(allowancePoints ?? state.settings.allowancePoints, 0)
+            allowancePoints: max(allowancePoints ?? state.settings.allowancePoints, 0),
+            allowanceRecurrence: allowanceRecurrence ?? state.settings.allowanceRecurrence,
+            lastAllowanceAppliedAt: state.settings.lastAllowanceAppliedAt
         )
         save()
     }
 
-    func applyAllowanceToAllKids() {
+    func applyAllowanceToAllKids(at date: Date = Date()) {
         let points = state.settings.allowancePoints
         guard points > 0 else { return }
 
@@ -301,7 +341,24 @@ final class RewardStore: ObservableObject {
                 currencyAmount: nil
             )
         }
+        state.settings.lastAllowanceAppliedAt = date
         save()
+    }
+
+    @discardableResult
+    func applyDueAllowanceIfNeeded(now: Date = Date()) -> Bool {
+        let recurrence = state.settings.allowanceRecurrence
+        guard recurrence != .none,
+              !state.kids.isEmpty,
+              state.settings.allowancePoints > 0 else {
+            return false
+        }
+        if let lastApplied = state.settings.lastAllowanceAppliedAt,
+           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
+            return false
+        }
+        applyAllowanceToAllKids(at: now)
+        return true
     }
 
     func updateParentPIN(_ pin: String) {
@@ -331,12 +388,14 @@ final class RewardStore: ObservableObject {
             return false
         }
 
+        let didApply: Bool
         switch currentRequest.kind {
         case .cashOut:
-            cashOut(points: currentRequest.points, for: kid)
+            didApply = cashOutExact(points: currentRequest.points, for: kid)
         case .interest:
-            applyInterest(to: kid)
+            didApply = applyInterest(points: currentRequest.points, to: kid)
         }
+        guard didApply else { return false }
 
         state.approvalRequests.removeAll { $0.id == currentRequest.id }
         save()
@@ -362,30 +421,57 @@ final class RewardStore: ObservableObject {
         try? encoder.encode(state)
     }
 
+    func importPreview(from data: Data) -> ImportPreview? {
+        guard let decoded = decodeImportData(data) else { return nil }
+        return ImportPreview(
+            kidsCount: decoded.state.kids.count,
+            tasksCount: decoded.state.tasks.count,
+            transactionsCount: decoded.state.transactions.count,
+            approvalRequestsCount: decoded.state.approvalRequests.count,
+            savedAt: decoded.savedAt,
+            deviceName: decoded.deviceName,
+            isCloudBackup: decoded.isCloudBackup
+        )
+    }
+
     @discardableResult
     func importStateData(_ data: Data) -> Bool {
-        guard let decoded = try? decoder.decode(RewardState.self, from: data) else { return false }
+        guard let decoded = decodeImportData(data)?.state else { return false }
+        let previousState = state
         state = decoded
         migrateLegacyParentPINIfNeeded()
-        save()
+        guard save() else {
+            state = previousState
+            return false
+        }
         return true
     }
 
-    func syncToICloud() {
-        guard let data = exportStateData(),
+    @discardableResult
+    func syncToICloud() -> Bool {
+        let envelope = CloudBackupEnvelope(
+            schemaVersion: 2,
+            savedAt: Date(),
+            deviceName: ProcessInfo.processInfo.processName,
+            state: state
+        )
+        guard let data = try? encoder.encode(envelope),
               let json = String(data: data, encoding: .utf8) else {
-            return
+            return false
         }
         let cloudStore = NSUbiquitousKeyValueStore.default
-        cloudStore.set(json, forKey: "kidsRewardsState")
-        cloudStore.synchronize()
+        cloudStore.set(json, forKey: cloudBackupKey)
+        return cloudStore.synchronize()
+    }
+
+    func iCloudBackupPreview() -> ImportPreview? {
+        guard let data = iCloudBackupData() else { return nil }
+        return importPreview(from: data)
     }
 
     @discardableResult
     func restoreFromICloud() -> Bool {
-        let cloudStore = NSUbiquitousKeyValueStore.default
-        guard let json = cloudStore.string(forKey: "kidsRewardsState"),
-              let data = json.data(using: .utf8) else {
+        guard let data = iCloudBackupData() else {
             return false
         }
         return importStateData(data)
@@ -394,6 +480,30 @@ final class RewardStore: ObservableObject {
     private func updateKid(_ id: UUID, mutate: (inout Kid) -> Void) {
         guard let index = state.kids.firstIndex(where: { $0.id == id }) else { return }
         mutate(&state.kids[index])
+    }
+
+    private func updateTaskCompletion(_ task: RewardTask, for kid: Kid, at date: Date) {
+        guard task.recurrence != .none else { return }
+        if let index = state.taskCompletions.firstIndex(where: { $0.taskID == task.id && $0.kidID == kid.id }) {
+            state.taskCompletions[index].lastAwardedAt = date
+        } else {
+            state.taskCompletions.append(TaskCompletion(kidID: kid.id, taskID: task.id, lastAwardedAt: date))
+        }
+    }
+
+    private func taskCompletion(for task: RewardTask, kid: Kid) -> TaskCompletion? {
+        state.taskCompletions.first { $0.taskID == task.id && $0.kidID == kid.id }
+    }
+
+    private func isDue(since date: Date, recurrence: RewardTask.Recurrence, now: Date) -> Bool {
+        switch recurrence {
+        case .none:
+            return true
+        case .daily:
+            return Calendar.current.dateComponents([.day], from: date, to: now).day ?? 0 >= 1
+        case .weekly:
+            return Calendar.current.dateComponents([.day], from: date, to: now).day ?? 0 >= 7
+        }
     }
 
     private func migrateLegacyParentPINIfNeeded() {
@@ -475,8 +585,57 @@ final class RewardStore: ObservableObject {
         )
     }
 
-    private func save() {
-        guard let data = try? encoder.encode(state) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
+    private func decodeImportData(_ data: Data) -> (state: RewardState, savedAt: Date?, deviceName: String?, isCloudBackup: Bool)? {
+        if let envelope = try? decoder.decode(CloudBackupEnvelope.self, from: data) {
+            return (envelope.state, envelope.savedAt, envelope.deviceName, true)
+        }
+        if let state = try? decoder.decode(RewardState.self, from: data) {
+            return (state, nil, nil, false)
+        }
+        return nil
+    }
+
+    private func iCloudBackupData() -> Data? {
+        let cloudStore = NSUbiquitousKeyValueStore.default
+        if let json = cloudStore.string(forKey: cloudBackupKey),
+           let data = json.data(using: .utf8) {
+            return data
+        }
+        guard let legacyJSON = cloudStore.string(forKey: legacyCloudBackupKey) else { return nil }
+        return legacyJSON.data(using: .utf8)
+    }
+
+    private func cashOutExact(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var didCashOut = false
+        updateKid(kid.id) { current in
+            guard current.availablePoints >= points else { return }
+            current.availablePoints -= points
+            addTransaction(
+                kidID: kid.id,
+                kind: .cashedOut,
+                points: points,
+                note: "Cash out",
+                currencyAmount: Decimal(points) * state.settings.currencyPerPoint
+            )
+            didCashOut = true
+        }
+        if didCashOut {
+            save()
+        }
+        return didCashOut
+    }
+
+    @discardableResult
+    private func save() -> Bool {
+        do {
+            let data = try encoder.encode(state)
+            try data.write(to: fileURL, options: [.atomic])
+            persistenceErrorMessage = nil
+            return true
+        } catch {
+            persistenceErrorMessage = error.localizedDescription
+            return false
+        }
     }
 }

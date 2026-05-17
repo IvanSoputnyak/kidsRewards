@@ -220,22 +220,28 @@ private struct ChildModeView: View {
                 }
             }
 
+            if !store.state.settings.approvalFlowEnabled {
+                Text("Ask a parent to turn on approval flow before requesting money actions.")
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+            }
+
             HStack(spacing: 10) {
                 Button("Request Cash Out") {
                     store.requestCashOut(points: kid.availablePoints, for: kid)
                 }
-                .disabled(kid.availablePoints == 0)
+                .disabled(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0)
                 .font(.caption.weight(.bold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 11)
-                .background(kid.availablePoints == 0 ? KidCoinTheme.muted : KidCoinTheme.primary)
-                .foregroundStyle(kid.availablePoints == 0 ? KidCoinTheme.mutedText : .white)
+                .background(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0 ? KidCoinTheme.muted : KidCoinTheme.primary)
+                .foregroundStyle(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0 ? KidCoinTheme.mutedText : .white)
                 .clipShape(Capsule())
 
                 Button("Request Interest") {
                     store.requestInterest(for: kid)
                 }
-                .disabled(store.interestPoints(for: kid) == 0)
+                .disabled(!store.state.settings.approvalFlowEnabled || store.interestPoints(for: kid) == 0)
                 .font(.caption.weight(.bold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 11)

@@ -18,6 +18,17 @@ struct RewardTask: Identifiable, Codable, Equatable, Hashable {
         case none
         case daily
         case weekly
+
+        var label: String {
+            switch self {
+            case .none:
+                return "Off"
+            case .daily:
+                return "Daily"
+            case .weekly:
+                return "Weekly"
+            }
+        }
     }
 
     var id = UUID()
@@ -54,6 +65,8 @@ struct RewardSettings: Codable, Equatable {
     var vaultInterestRate: Decimal
     var approvalFlowEnabled: Bool
     var allowancePoints: Int
+    var allowanceRecurrence: RewardTask.Recurrence
+    var lastAllowanceAppliedAt: Date?
     var legacyParentPIN: String?
 
     static let defaults = RewardSettings(
@@ -62,6 +75,8 @@ struct RewardSettings: Codable, Equatable {
         vaultInterestRate: 0.05,
         approvalFlowEnabled: false,
         allowancePoints: 5,
+        allowanceRecurrence: .none,
+        lastAllowanceAppliedAt: nil,
         legacyParentPIN: nil
     )
 
@@ -72,6 +87,8 @@ struct RewardSettings: Codable, Equatable {
         case parentPIN
         case approvalFlowEnabled
         case allowancePoints
+        case allowanceRecurrence
+        case lastAllowanceAppliedAt
     }
 
     init(
@@ -80,6 +97,8 @@ struct RewardSettings: Codable, Equatable {
         vaultInterestRate: Decimal,
         approvalFlowEnabled: Bool = false,
         allowancePoints: Int = 5,
+        allowanceRecurrence: RewardTask.Recurrence = .none,
+        lastAllowanceAppliedAt: Date? = nil,
         legacyParentPIN: String? = nil
     ) {
         self.currencyCode = currencyCode
@@ -87,6 +106,8 @@ struct RewardSettings: Codable, Equatable {
         self.vaultInterestRate = vaultInterestRate
         self.approvalFlowEnabled = approvalFlowEnabled
         self.allowancePoints = allowancePoints
+        self.allowanceRecurrence = allowanceRecurrence
+        self.lastAllowanceAppliedAt = lastAllowanceAppliedAt
         self.legacyParentPIN = legacyParentPIN
     }
 
@@ -97,6 +118,8 @@ struct RewardSettings: Codable, Equatable {
         vaultInterestRate = try container.decode(Decimal.self, forKey: .vaultInterestRate)
         approvalFlowEnabled = try container.decodeIfPresent(Bool.self, forKey: .approvalFlowEnabled) ?? false
         allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints) ?? 5
+        allowanceRecurrence = try container.decodeIfPresent(RewardTask.Recurrence.self, forKey: .allowanceRecurrence) ?? .none
+        lastAllowanceAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastAllowanceAppliedAt)
         legacyParentPIN = try container.decodeIfPresent(String.self, forKey: .parentPIN)
     }
 
@@ -107,6 +130,8 @@ struct RewardSettings: Codable, Equatable {
         try container.encode(vaultInterestRate, forKey: .vaultInterestRate)
         try container.encode(approvalFlowEnabled, forKey: .approvalFlowEnabled)
         try container.encode(allowancePoints, forKey: .allowancePoints)
+        try container.encode(allowanceRecurrence, forKey: .allowanceRecurrence)
+        try container.encodeIfPresent(lastAllowanceAppliedAt, forKey: .lastAllowanceAppliedAt)
     }
 }
 
@@ -155,12 +180,37 @@ struct ApprovalRequest: Identifiable, Codable, Equatable {
     var date: Date
 }
 
+struct TaskCompletion: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var kidID: UUID
+    var taskID: UUID
+    var lastAwardedAt: Date
+}
+
+struct ImportPreview: Equatable {
+    var kidsCount: Int
+    var tasksCount: Int
+    var transactionsCount: Int
+    var approvalRequestsCount: Int
+    var savedAt: Date?
+    var deviceName: String?
+    var isCloudBackup: Bool
+}
+
+struct CloudBackupEnvelope: Codable, Equatable {
+    var schemaVersion: Int
+    var savedAt: Date
+    var deviceName: String
+    var state: RewardState
+}
+
 struct RewardState: Codable, Equatable {
     var kids: [Kid]
     var tasks: [RewardTask]
     var settings: RewardSettings
     var transactions: [RewardTransaction]
     var approvalRequests: [ApprovalRequest]
+    var taskCompletions: [TaskCompletion]
 
     private enum CodingKeys: String, CodingKey {
         case kids
@@ -168,6 +218,7 @@ struct RewardState: Codable, Equatable {
         case settings
         case transactions
         case approvalRequests
+        case taskCompletions
     }
 
     init(
@@ -175,13 +226,15 @@ struct RewardState: Codable, Equatable {
         tasks: [RewardTask],
         settings: RewardSettings,
         transactions: [RewardTransaction],
-        approvalRequests: [ApprovalRequest] = []
+        approvalRequests: [ApprovalRequest] = [],
+        taskCompletions: [TaskCompletion] = []
     ) {
         self.kids = kids
         self.tasks = tasks
         self.settings = settings
         self.transactions = transactions
         self.approvalRequests = approvalRequests
+        self.taskCompletions = taskCompletions
     }
 
     init(from decoder: Decoder) throws {
@@ -191,6 +244,7 @@ struct RewardState: Codable, Equatable {
         settings = try container.decode(RewardSettings.self, forKey: .settings)
         transactions = try container.decode([RewardTransaction].self, forKey: .transactions)
         approvalRequests = try container.decodeIfPresent([ApprovalRequest].self, forKey: .approvalRequests) ?? []
+        taskCompletions = try container.decodeIfPresent([TaskCompletion].self, forKey: .taskCompletions) ?? []
     }
 
     static let empty = RewardState(
@@ -198,7 +252,8 @@ struct RewardState: Codable, Equatable {
         tasks: [],
         settings: .defaults,
         transactions: [],
-        approvalRequests: []
+        approvalRequests: [],
+        taskCompletions: []
     )
 
     static let sample = RewardState(
@@ -213,6 +268,7 @@ struct RewardState: Codable, Equatable {
         ],
         settings: .defaults,
         transactions: [],
-        approvalRequests: []
+        approvalRequests: [],
+        taskCompletions: []
     )
 }

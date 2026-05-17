@@ -134,6 +134,7 @@ struct TasksView: View {
                                     .clipShape(Circle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Edit \(task.title)")
                             Button {
                                 store.deleteTask(task)
                             } label: {
@@ -145,6 +146,7 @@ struct TasksView: View {
                                     .clipShape(Circle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Delete \(task.title)")
                         }
                         .padding(14)
                         .tileCard(cornerRadius: 20)
@@ -219,19 +221,6 @@ private struct EditTaskModal: View {
             .frame(maxWidth: 360)
             .tileCard(cornerRadius: 28)
             .padding(.horizontal, 24)
-        }
-    }
-}
-
-private extension RewardTask.Recurrence {
-    var label: String {
-        switch self {
-        case .none:
-            return "Once"
-        case .daily:
-            return "Daily"
-        case .weekly:
-            return "Weekly"
         }
     }
 }

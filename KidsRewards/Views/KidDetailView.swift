@@ -275,8 +275,15 @@ struct KidDetailView: View {
                             store.award(task: task, to: kid)
                         } label: {
                             HStack {
-                                Text(task.title)
-                                    .font(.subheadline.weight(.semibold))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(task.title)
+                                        .font(.subheadline.weight(.semibold))
+                                    if task.recurrence != .none && !store.isTaskAvailable(task, for: kid) {
+                                        Text("Available \(task.recurrence.label.lowercased())")
+                                            .font(.caption2)
+                                            .foregroundStyle(KidCoinTheme.mutedText)
+                                    }
+                                }
                                 Spacer()
                                 Text("+\(task.points)")
                                     .font(.subheadline.weight(.bold))
@@ -290,7 +297,10 @@ struct KidDetailView: View {
                             .padding(15)
                             .tileCard(cornerRadius: 18)
                         }
+                        .disabled(!store.isTaskAvailable(task, for: kid))
                         .buttonStyle(.plain)
+                        .accessibilityLabel("\(task.title), \(task.points) points")
+                        .accessibilityHint(store.isTaskAvailable(task, for: kid) ? "Awards points" : "This recurring chore is not due yet")
                     }
                 }
             }
@@ -499,6 +509,7 @@ private struct TransactionRow: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Correct transaction")
 
             Button(action: onDelete) {
                 Image(systemName: "trash")
@@ -509,6 +520,7 @@ private struct TransactionRow: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Delete transaction")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
