@@ -5,6 +5,8 @@ struct DashboardView: View {
     @State private var showingAddKid = false
     @State private var newKidName = ""
     @State private var kidPendingDeletion: Kid?
+    @State private var kidBeingEdited: Kid?
+    @State private var editedKidName = ""
 
     var body: some View {
         NavigationStack {
@@ -46,6 +48,15 @@ struct DashboardView: View {
                                             Label("Delete", systemImage: "trash")
                                         }
                                     }
+                                    .swipeActions(edge: .leading) {
+                                        Button {
+                                            kidBeingEdited = kid
+                                            editedKidName = kid.name
+                                        } label: {
+                                            Label("Edit", systemImage: "pencil")
+                                        }
+                                        .tint(KidCoinTheme.primary)
+                                    }
                                 }
                             }
                         }
@@ -79,8 +90,27 @@ struct DashboardView: View {
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
+
+                if kidBeingEdited != nil {
+                    EditKidModal(
+                        name: $editedKidName,
+                        onCancel: {
+                            editedKidName = ""
+                            kidBeingEdited = nil
+                        },
+                        onSave: {
+                            if let kidBeingEdited {
+                                store.updateKid(kidBeingEdited, name: editedKidName)
+                            }
+                            editedKidName = ""
+                            kidBeingEdited = nil
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
             }
             .animation(.easeOut(duration: 0.18), value: showingAddKid)
+            .animation(.easeOut(duration: 0.18), value: kidBeingEdited)
             .navigationDestination(for: Kid.self) { kid in
                 KidDetailView(kidID: kid.id)
             }
@@ -110,6 +140,56 @@ struct DashboardView: View {
     private var deletionTitle: String {
         guard let kidPendingDeletion else { return "Remove Kid?" }
         return "Remove \(kidPendingDeletion.name)?"
+    }
+}
+
+private struct EditKidModal: View {
+    @Binding var name: String
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        ZStack {
+            KidCoinTheme.foreground.opacity(0.36)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onCancel)
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Edit Kid")
+                    .font(.system(.title2, design: .rounded).weight(.bold))
+                TextField("Name", text: $name)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .background(KidCoinTheme.muted)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                HStack(spacing: 10) {
+                    Button("Cancel", action: onCancel)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(KidCoinTheme.muted)
+                        .clipShape(Capsule())
+
+                    Button("Save") {
+                        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                        onSave()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(KidCoinTheme.primary)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(22)
+            .frame(maxWidth: 360)
+            .tileCard(cornerRadius: 28)
+            .padding(.horizontal, 24)
+        }
     }
 }
 

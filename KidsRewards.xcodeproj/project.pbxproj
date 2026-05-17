@@ -18,6 +18,7 @@
 		A10000000000000000000009 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SettingsView.swift */; };
 		A1000000000000000000000A /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* DesignSystem.swift */; };
 		A1000000000000000000000B /* RewardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* RewardStoreTests.swift */; };
+		A1000000000000000000000D /* ParentPINSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* ParentPINSecurity.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +45,7 @@
 		A2000000000000000000000A /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DesignSystem.swift; sourceTree = "<group>"; };
 		A2000000000000000000000B /* RewardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewardStoreTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* KidsRewardsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KidsRewardsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000D /* ParentPINSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/ParentPINSecurity.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +81,7 @@
 				A20000000000000000000001 /* KidsRewardsApp.swift */,
 				A20000000000000000000002 /* RewardModels.swift */,
 				A20000000000000000000003 /* RewardStore.swift */,
+				A2000000000000000000000D /* ParentPINSecurity.swift */,
 				A20000000000000000000004 /* Formatters.swift */,
 				A20000000000000000000005 /* ContentView.swift */,
 				A20000000000000000000006 /* DashboardView.swift */,
@@ -215,6 +218,7 @@
 				A10000000000000000000008 /* TasksView.swift in Sources */,
 				A10000000000000000000009 /* SettingsView.swift in Sources */,
 				A1000000000000000000000A /* DesignSystem.swift in Sources */,
+				A1000000000000000000000D /* ParentPINSecurity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -362,6 +366,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = KidsRewards;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Unlock KidCoin Keeper parent controls with Face ID.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -391,6 +396,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = KidsRewards;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Unlock KidCoin Keeper parent controls with Face ID.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
