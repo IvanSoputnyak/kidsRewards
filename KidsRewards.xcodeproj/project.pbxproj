@@ -16,7 +16,19 @@
 		A10000000000000000000007 /* KidDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* KidDetailView.swift */; };
 		A10000000000000000000008 /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* TasksView.swift */; };
 		A10000000000000000000009 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SettingsView.swift */; };
+		A1000000000000000000000A /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* DesignSystem.swift */; };
+		A1000000000000000000000B /* RewardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* RewardStoreTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A11000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000000;
+			remoteInfo = KidsRewards;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000000 /* KidsRewards.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KidsRewards.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -29,10 +41,20 @@
 		A20000000000000000000007 /* KidDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KidDetailView.swift; sourceTree = "<group>"; };
 		A20000000000000000000008 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TasksView.swift; sourceTree = "<group>"; };
 		A20000000000000000000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DesignSystem.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* RewardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewardStoreTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* KidsRewardsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KidsRewardsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A30000000000000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A30000000000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -46,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000001 /* KidsRewards */,
+				A40000000000000000000003 /* KidsRewardsTests */,
 				A40000000000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -62,6 +85,7 @@
 				A20000000000000000000007 /* KidDetailView.swift */,
 				A20000000000000000000008 /* TasksView.swift */,
 				A20000000000000000000009 /* SettingsView.swift */,
+				A2000000000000000000000A /* DesignSystem.swift */,
 			);
 			path = KidsRewards;
 			sourceTree = "<group>";
@@ -70,8 +94,17 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000000 /* KidsRewards.app */,
+				A2000000000000000000000C /* KidsRewardsTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* KidsRewardsTests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000B /* RewardStoreTests.swift */,
+			);
+			path = KidsRewardsTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -94,6 +127,24 @@
 			productReference = A20000000000000000000000 /* KidsRewards.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A50000000000000000000001 /* KidsRewardsTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "KidsRewardsTests" */;
+			buildPhases = (
+				A70000000000000000000001 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+				A80000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A12000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = KidsRewardsTests;
+			productName = KidsRewardsTests;
+			productReference = A2000000000000000000000C /* KidsRewardsTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -106,6 +157,10 @@
 				TargetAttributes = {
 					A50000000000000000000000 = {
 						CreatedOnToolsVersion = 15.3;
+					};
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 15.3;
+						TestTargetID = A50000000000000000000000;
 					};
 				};
 			};
@@ -123,12 +178,20 @@
 			projectRoot = "";
 			targets = (
 				A50000000000000000000000 /* KidsRewards */,
+				A50000000000000000000001 /* KidsRewardsTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A80000000000000000000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A80000000000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -151,10 +214,27 @@
 				A10000000000000000000007 /* KidDetailView.swift in Sources */,
 				A10000000000000000000008 /* TasksView.swift in Sources */,
 				A10000000000000000000009 /* SettingsView.swift in Sources */,
+				A1000000000000000000000A /* DesignSystem.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A70000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000B /* RewardStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A12000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000000 /* KidsRewards */;
+			targetProxy = A11000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A91000000000000000000000 /* Debug */ = {
@@ -330,6 +410,48 @@
 			};
 			name = Release;
 		};
+		A91000000000000000000004 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.KidsRewardsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KidsRewards.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KidsRewards";
+			};
+			name = Debug;
+		};
+		A91000000000000000000005 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.KidsRewardsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KidsRewards.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KidsRewards";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -347,6 +469,15 @@
 			buildConfigurations = (
 				A91000000000000000000002 /* Debug */,
 				A91000000000000000000003 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "KidsRewardsTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A91000000000000000000004 /* Debug */,
+				A91000000000000000000005 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

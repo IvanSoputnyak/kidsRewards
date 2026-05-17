@@ -40,6 +40,17 @@ struct RewardTransaction: Identifiable, Codable, Equatable {
     var note: String
     var date: Date
     var currencyAmount: Decimal?
+
+    var pointsDisplayLabel: String {
+        switch kind {
+        case .cashedOut:
+            return "-\(points)"
+        case .deposited:
+            return "moved \(points)"
+        case .earned, .interest:
+            return "+\(points)"
+        }
+    }
 }
 
 struct RewardState: Codable, Equatable {
@@ -47,6 +58,13 @@ struct RewardState: Codable, Equatable {
     var tasks: [RewardTask]
     var settings: RewardSettings
     var transactions: [RewardTransaction]
+
+    static let empty = RewardState(
+        kids: [],
+        tasks: [],
+        settings: .defaults,
+        transactions: []
+    )
 
     static let sample = RewardState(
         kids: [

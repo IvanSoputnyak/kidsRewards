@@ -8,18 +8,22 @@ final class RewardStore: ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init() {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        fileURL = documents.appendingPathComponent("kids-rewards-state.json")
+    init(initialState: RewardState = .empty, fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            self.fileURL = documents.appendingPathComponent("kids-rewards-state.json")
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
 
-        if let data = try? Data(contentsOf: fileURL),
+        if let data = try? Data(contentsOf: self.fileURL),
            let decoded = try? decoder.decode(RewardState.self, from: data) {
             state = decoded
         } else {
-            state = .sample
+            state = initialState
             save()
         }
     }
@@ -122,8 +126,14 @@ final class RewardStore: ObservableObject {
     }
 
     func updateSettings(currencyCode: String, currencyPerPoint: Decimal, vaultInterestRate: Decimal) {
+        let normalizedCurrency = currencyCode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .prefix(3)
+        let savedCurrencyCode = normalizedCurrency.isEmpty ? state.settings.currencyCode : String(normalizedCurrency)
+
         state.settings = RewardSettings(
-            currencyCode: currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+            currencyCode: savedCurrencyCode,
             currencyPerPoint: max(currencyPerPoint, 0),
             vaultInterestRate: max(vaultInterestRate, 0)
         )
