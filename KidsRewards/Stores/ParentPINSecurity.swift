@@ -1,16 +1,18 @@
-import CryptoKit
+import CommonCrypto
 import Foundation
 import LocalAuthentication
 import Security
 
-protocol ParentPINManaging {
+protocol ParentPINManaging: Sendable {
     var hasPIN: Bool { get }
-    func save(pin: String)
-    func clear()
+    @discardableResult
+    func save(pin: String) -> Bool
+    @discardableResult
+    func clear() -> Bool
     func verify(pin: String) -> Bool
 }
 
-final class KeychainParentPINManager: ParentPINManaging {
+final class KeychainParentPINManager: ParentPINManaging, @unchecked Sendable {
     private struct Payload: Codable {
         let version: Int
         let iterations: Int
@@ -58,15 +60,19 @@ final class KeychainParentPINManager: ParentPINManaging {
         }
     }
 
-    func save(pin: String) {
+    @discardableResult
+    func save(pin: String) -> Bool {
         let salt = randomSalt()
+        guard let hash = stretchedHash(pin: pin, salt: salt, iterations: currentIterations) else {
+            return false
+        }
         let nextPayload = Payload(
             version: currentVersion,
             iterations: currentIterations,
             salt: salt,
-            hash: stretchedHash(pin: pin, salt: salt, iterations: currentIterations)
+            hash: hash
         )
-        guard let data = try? JSONEncoder().encode(nextPayload) else { return }
+        guard let data = try? JSONEncoder().encode(nextPayload) else { return false }
 
         let query = baseQuery()
         SecItemDelete(query as CFDictionary)
@@ -74,11 +80,13 @@ final class KeychainParentPINManager: ParentPINManaging {
         var addQuery = query
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        SecItemAdd(addQuery as CFDictionary, nil)
+        return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
     }
 
-    func clear() {
-        SecItemDelete(baseQuery() as CFDictionary)
+    @discardableResult
+    func clear() -> Bool {
+        let status = SecItemDelete(baseQuery() as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     func verify(pin: String) -> Bool {
@@ -93,9 +101,15 @@ final class KeychainParentPINManager: ParentPINManaging {
         }
 
         let iterations = max(payload.iterations, 1)
-        let hash = payload.version >= 2
-            ? stretchedHash(pin: pin, salt: payload.salt, iterations: iterations)
-            : singleHash(pin: pin, salt: payload.salt)
+        let hash: Data
+        if payload.version >= 2 {
+            guard let stretchedHash = stretchedHash(pin: pin, salt: payload.salt, iterations: iterations) else {
+                return false
+            }
+            hash = stretchedHash
+        } else {
+            hash = singleHash(pin: pin, salt: payload.salt)
+        }
         return secureCompare(hash, payload.hash)
     }
 
@@ -135,17 +149,34 @@ final class KeychainParentPINManager: ParentPINManaging {
         var input = Data()
         input.append(salt)
         input.append(Data(pin.utf8))
-        return Data(SHA256.hash(data: input))
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        input.withUnsafeBytes { inputBytes in
+            _ = CC_SHA256(inputBytes.baseAddress, CC_LONG(input.count), &digest)
+        }
+        return Data(digest)
     }
 
-    private func stretchedHash(pin: String, salt: Data, iterations: Int) -> Data {
-        var digest = singleHash(pin: pin, salt: salt)
-        guard iterations > 1 else { return digest }
-
-        for _ in 1..<iterations {
-            digest = Data(SHA256.hash(data: digest))
+    private func stretchedHash(pin: String, salt: Data, iterations: Int) -> Data? {
+        guard iterations > 1 else {
+            return singleHash(pin: pin, salt: salt)
         }
-        return digest
+
+        var derivedKey = [UInt8](repeating: 0, count: 32)
+        let password = Array(pin.utf8)
+        let saltBytes = Array(salt)
+        let status = CCKeyDerivationPBKDF(
+            CCPBKDFAlgorithm(kCCPBKDF2),
+            password,
+            password.count,
+            saltBytes,
+            saltBytes.count,
+            CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+            UInt32(iterations),
+            &derivedKey,
+            derivedKey.count
+        )
+        guard status == kCCSuccess else { return nil }
+        return Data(derivedKey)
     }
 
     private func secureCompare(_ lhs: Data, _ rhs: Data) -> Bool {

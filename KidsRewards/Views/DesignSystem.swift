@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum KidCoinTheme {
     static let background = Color(red: 0.98, green: 0.95, blue: 0.86)
@@ -23,9 +26,155 @@ struct KidCoinBackground: ViewModifier {
     }
 }
 
+enum KidCoinKeyboard {
+    static func dismiss() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        #endif
+    }
+}
+
+#if canImport(UIKit)
+private final class KeyboardDismissTapCoordinator: NSObject, UIGestureRecognizerDelegate {
+    static let shared = KeyboardDismissTapCoordinator()
+
+    private weak var installedWindow: UIWindow?
+    private var tapRecognizer: UITapGestureRecognizer?
+
+    func install(on window: UIWindow) {
+        guard installedWindow !== window else { return }
+
+        if let tapRecognizer, let installedWindow {
+            installedWindow.removeGestureRecognizer(tapRecognizer)
+        }
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+        tapRecognizer = tap
+        installedWindow = window
+    }
+
+    @objc private func dismissKeyboard() {
+        KidCoinKeyboard.dismiss()
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !containsTextInput(touch.view)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    private func containsTextInput(_ view: UIView?) -> Bool {
+        var current: UIView? = view
+        while let node = current {
+            if node is UITextField || node is UITextView || node is UISearchBar {
+                return true
+            }
+            current = node.superview
+        }
+        return false
+    }
+}
+
+private struct KeyboardDismissOnTapInstaller: UIViewRepresentable {
+    func makeUIView(context: Context) -> KeyboardDismissTapAnchorView {
+        let view = KeyboardDismissTapAnchorView()
+        view.onWindowChange = { window in
+            guard let window else { return }
+            KeyboardDismissTapCoordinator.shared.install(on: window)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyboardDismissTapAnchorView, context: Context) {}
+}
+
+private final class KeyboardDismissTapAnchorView: UIView {
+    var onWindowChange: ((UIWindow?) -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowChange?(window)
+    }
+}
+#endif
+
+enum TextFieldFilters {
+    static func digitsOnly(_ source: Binding<String>, limit: Int? = nil) -> Binding<String> {
+        Binding(
+            get: { source.wrappedValue },
+            set: { newValue in
+                var filtered = newValue.filter(\.isNumber)
+                if let limit {
+                    filtered = String(filtered.prefix(limit))
+                }
+                source.wrappedValue = filtered
+            }
+        )
+    }
+
+    static func currencyCode(_ source: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { source.wrappedValue },
+            set: { newValue in
+                source.wrappedValue = String(newValue.uppercased().prefix(3))
+            }
+        )
+    }
+}
+
 extension View {
     func kidCoinBackground() -> some View {
         modifier(KidCoinBackground())
+    }
+
+    func kidCoinScroll() -> some View {
+        scrollDismissesKeyboard(.interactively)
+    }
+
+    /// Dismisses the keyboard when tapping outside text fields (including number pads with no Done key).
+    func dismissKeyboardOnTapOutside() -> some View {
+        #if canImport(UIKit)
+        background(KeyboardDismissOnTapInstaller())
+        #else
+        self
+        #endif
+    }
+
+    func kidCoinNumericPIN() -> some View {
+        keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+    }
+
+    func kidCoinDecimalEntry() -> some View {
+        keyboardType(.decimalPad)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+    }
+
+    func kidCoinNumberEntry() -> some View {
+        keyboardType(.numberPad)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+    }
+
+    func kidCoinNameEntry() -> some View {
+        textInputAutocapitalization(.words)
+            .autocorrectionDisabled()
     }
 
     func tileCard(cornerRadius: CGFloat = 24) -> some View {
@@ -40,29 +189,22 @@ extension View {
     }
 }
 
-struct PageHeader: View {
+struct PageHeader<Trailing: View>: View {
     let eyebrow: String
     let title: String
     var subtitle: String?
-    var trailing: AnyView?
+    let trailing: Trailing
 
-    init<Content: View>(
+    init(
         eyebrow: String,
         title: String,
         subtitle: String? = nil,
-        @ViewBuilder trailing: () -> Content
+        @ViewBuilder trailing: () -> Trailing
     ) {
         self.eyebrow = eyebrow
         self.title = title
         self.subtitle = subtitle
-        self.trailing = AnyView(trailing())
-    }
-
-    init(eyebrow: String, title: String, subtitle: String? = nil) {
-        self.eyebrow = eyebrow
-        self.title = title
-        self.subtitle = subtitle
-        self.trailing = nil
+        self.trailing = trailing()
     }
 
     var body: some View {
@@ -83,6 +225,14 @@ struct PageHeader: View {
             }
             Spacer()
             trailing
+        }
+    }
+}
+
+extension PageHeader where Trailing == EmptyView {
+    init(eyebrow: String, title: String, subtitle: String? = nil) {
+        self.init(eyebrow: eyebrow, title: title, subtitle: subtitle) {
+            EmptyView()
         }
     }
 }
@@ -109,6 +259,7 @@ struct MetricTile: View {
     let value: Int
     var systemImage: String?
     let tone: Tone
+    var showsDisclosure: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -117,6 +268,12 @@ struct MetricTile: View {
                     Image(systemName: systemImage)
                 }
                 Text(title.uppercased())
+                Spacer(minLength: 0)
+                if showsDisclosure {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                }
             }
             .font(.caption2.weight(.semibold))
             .tracking(1.8)
@@ -134,6 +291,7 @@ struct MetricTile: View {
         .background(background)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: .black.opacity(0.07), radius: 14, x: 0, y: 8)
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var background: LinearGradient {
@@ -268,6 +426,37 @@ struct CounterControl: View {
         .foregroundStyle(KidCoinTheme.foreground.opacity(0.75))
         .background(KidCoinTheme.muted)
         .clipShape(Capsule())
+    }
+}
+
+struct SettingsField<Content: View>: View {
+    let label: String
+    let hint: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+            }
+            Spacer()
+            content
+        }
+    }
+}
+
+extension View {
+    func fieldPill() -> some View {
+        self
+            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(KidCoinTheme.muted)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 

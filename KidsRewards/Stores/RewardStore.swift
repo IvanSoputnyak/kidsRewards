@@ -1,16 +1,30 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 final class RewardStore: ObservableObject {
     @Published private(set) var state: RewardState
     @Published private(set) var persistenceErrorMessage: String?
+    @Published private(set) var hasParentPIN: Bool
+    @Published private(set) var parentPINLockoutUntil: Date?
+
+    static let parentPINMaxFailedAttempts = 5
+    static let parentPINLockoutDuration: TimeInterval = 60
+
+    private var parentPINFailedAttempts = 0
 
     private let fileURL: URL
     private let pinManager: ParentPINManaging
     private let cloudBackupKey = "kidsRewardsState.v2"
     private let legacyCloudBackupKey = "kidsRewardsState"
+    private let lastLocalSaveKey = "kidsRewards.lastSavedAt"
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private var iCloudObserver: NSObjectProtocol?
+    /// Injected backup for unit tests when `NSUbiquitousKeyValueStore` is unavailable.
+    var debugICloudBackupData: Data?
 
     init(
         initialState: RewardState = .empty,
@@ -18,6 +32,7 @@ final class RewardStore: ObservableObject {
         pinManager: ParentPINManaging = KeychainParentPINManager()
     ) {
         self.pinManager = pinManager
+        self.hasParentPIN = pinManager.hasPIN
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -28,16 +43,24 @@ final class RewardStore: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
 
-        if let data = try? Data(contentsOf: self.fileURL),
+        if initialState == .empty,
+           let data = try? Data(contentsOf: self.fileURL),
            let decoded = try? decoder.decode(RewardState.self, from: data) {
             state = decoded
             migrateLegacyParentPINIfNeeded()
-            applyDueAllowanceIfNeeded()
+            runScheduledMaintenance()
         } else {
             state = initialState
             migrateLegacyParentPINIfNeeded()
-            applyDueAllowanceIfNeeded()
+            runScheduledMaintenance()
             save()
+        }
+        registerICloudObserverIfNeeded()
+    }
+
+    deinit {
+        if let iCloudObserver {
+            NotificationCenter.default.removeObserver(iCloudObserver)
         }
     }
 
@@ -47,10 +70,6 @@ final class RewardStore: ObservableObject {
 
     var totalVaultPoints: Int {
         state.kids.reduce(0) { $0 + $1.vaultPoints }
-    }
-
-    var hasParentPIN: Bool {
-        pinManager.hasPIN
     }
 
     func addKid(name: String) {
@@ -67,54 +86,113 @@ final class RewardStore: ObservableObject {
         save()
     }
 
+    func allowancePoints(for kid: Kid) -> Int {
+        max(kid.allowancePoints ?? state.settings.allowancePoints, 0)
+    }
+
+    func updateKidAllowancePoints(_ kid: Kid, points: Int?) {
+        updateKid(kid.id) {
+            if let points {
+                $0.allowancePoints = max(points, 0)
+            } else {
+                $0.allowancePoints = nil
+            }
+        }
+        save()
+    }
+
+    func savingsGoalProgress(for kid: Kid) -> Int {
+        kid.totalPoints
+    }
+
+    var isParentPINLockedOut: Bool {
+        guard let parentPINLockoutUntil else { return false }
+        return parentPINLockoutUntil > Date()
+    }
+
+    func parentPINLockoutRemainingSeconds(now: Date = Date()) -> Int {
+        guard let parentPINLockoutUntil, parentPINLockoutUntil > now else { return 0 }
+        return Int(ceil(parentPINLockoutUntil.timeIntervalSince(now)))
+    }
+
     func deleteKid(_ kid: Kid) {
         state.kids.removeAll { $0.id == kid.id }
         state.transactions.removeAll { $0.kidID == kid.id }
+        state.approvalRequests.removeAll { $0.kidID == kid.id }
+        state.taskCompletions.removeAll { $0.kidID == kid.id }
+        for index in state.tasks.indices {
+            state.tasks[index].assignedKidIDs.removeAll { $0 == kid.id }
+        }
         save()
     }
 
-    func addTask(title: String, points: Int) {
+    func addTask(
+        title: String,
+        points: Int,
+        recurrence: RewardTask.Recurrence = .none,
+        assignedKidIDs: [UUID] = []
+    ) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, points > 0 else { return }
-        state.tasks.append(RewardTask(title: trimmed, points: points))
+        state.tasks.append(
+            RewardTask(
+                title: trimmed,
+                points: points,
+                recurrence: recurrence,
+                assignedKidIDs: assignedKidIDs
+            )
+        )
         save()
     }
 
-    func updateTask(_ task: RewardTask, title: String, points: Int) {
+    func updateTask(
+        _ task: RewardTask,
+        title: String,
+        points: Int,
+        recurrence: RewardTask.Recurrence? = nil,
+        assignedKidIDs: [UUID]? = nil
+    ) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, points > 0 else { return }
         guard let index = state.tasks.firstIndex(where: { $0.id == task.id }) else { return }
         state.tasks[index].title = trimmed
         state.tasks[index].points = points
+        if let recurrence {
+            state.tasks[index].recurrence = recurrence
+        }
+        if let assignedKidIDs {
+            state.tasks[index].assignedKidIDs = assignedKidIDs
+        }
         save()
     }
 
-    func updateTaskRecurrence(_ task: RewardTask, recurrence: RewardTask.Recurrence) {
-        guard let index = state.tasks.firstIndex(where: { $0.id == task.id }) else { return }
-        state.tasks[index].recurrence = recurrence
-        save()
+    func tasks(for kid: Kid) -> [RewardTask] {
+        state.tasks.filter { $0.isAssigned(to: kid.id) }
     }
 
     func deleteTask(_ task: RewardTask) {
         state.tasks.removeAll { $0.id == task.id }
+        state.taskCompletions.removeAll { $0.taskID == task.id }
         save()
     }
 
     func award(task: RewardTask, to kid: Kid, at date: Date = Date()) {
-        guard isTaskAvailable(task, for: kid, now: date) else { return }
+        guard task.isAssigned(to: kid.id), isTaskAvailable(task, for: kid, now: date) else { return }
         updateKid(kid.id) { $0.availablePoints += task.points }
         addTransaction(
             kidID: kid.id,
             kind: .earned,
             points: task.points,
             note: task.title,
-            currencyAmount: nil
+            currencyAmount: nil,
+            date: date
         )
         updateTaskCompletion(task, for: kid, at: date)
         save()
     }
 
     func isTaskAvailable(_ task: RewardTask, for kid: Kid, now: Date = Date()) -> Bool {
+        guard task.isAssigned(to: kid.id) else { return false }
         guard task.recurrence != .none,
               let completion = taskCompletion(for: task, kid: kid) else {
             return true
@@ -122,45 +200,74 @@ final class RewardStore: ObservableObject {
         return isDue(since: completion.lastAwardedAt, recurrence: task.recurrence, now: now)
     }
 
-    func deposit(points: Int, for kid: Kid) {
+    func withdraw(points: Int, for kid: Kid) {
         guard points > 0 else { return }
+        var withdrawnAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.vaultPoints)
+            guard amount > 0 else { return }
+            withdrawnAmount = amount
+            current.vaultPoints -= amount
+            current.availablePoints += amount
+        }
+        guard withdrawnAmount > 0 else { return }
+        addTransaction(
+            kidID: kid.id,
+            kind: .withdrawn,
+            points: withdrawnAmount,
+            note: "Vault withdrawal",
+            currencyAmount: nil
+        )
+        save()
+    }
+
+    @discardableResult
+    func deposit(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        if state.settings.approvalFlowEnabled {
+            requestDeposit(points: points, for: kid)
+            return min(points, kid.availablePoints) > 0
+        }
+        var depositedAmount = 0
         updateKid(kid.id) { current in
             let amount = min(points, current.availablePoints)
             guard amount > 0 else { return }
+            depositedAmount = amount
             current.availablePoints -= amount
             current.vaultPoints += amount
-            addTransaction(
-                kidID: kid.id,
-                kind: .deposited,
-                points: amount,
-                note: "Vault deposit",
-                currencyAmount: nil
-            )
         }
+        guard depositedAmount > 0 else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .deposited,
+            points: depositedAmount,
+            note: "Vault deposit",
+            currencyAmount: nil
+        )
         save()
+        return true
     }
 
     @discardableResult
     func cashOut(points: Int, for kid: Kid) -> Bool {
         guard points > 0 else { return false }
-        var didCashOut = false
+        var cashedOutAmount = 0
         updateKid(kid.id) { current in
             let amount = min(points, current.availablePoints)
             guard amount > 0 else { return }
+            cashedOutAmount = amount
             current.availablePoints -= amount
-            addTransaction(
-                kidID: kid.id,
-                kind: .cashedOut,
-                points: amount,
-                note: "Cash out",
-                currencyAmount: Decimal(amount) * state.settings.currencyPerPoint
-            )
-            didCashOut = true
         }
-        if didCashOut {
-            save()
-        }
-        return didCashOut
+        guard cashedOutAmount > 0 else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .cashedOut,
+            points: cashedOutAmount,
+            note: "Cash out",
+            currencyAmount: Decimal(cashedOutAmount) * state.settings.currencyPerPoint
+        )
+        save()
+        return true
     }
 
     func requestCashOut(points: Int, for kid: Kid) {
@@ -183,24 +290,25 @@ final class RewardStore: ObservableObject {
     }
 
     @discardableResult
-    private func applyInterest(points: Int, to kid: Kid) -> Bool {
+    private func applyInterest(points: Int, to kid: Kid, persist: Bool = true) -> Bool {
         guard points > 0 else { return false }
         var didApplyInterest = false
         updateKid(kid.id) { current in
             current.vaultPoints += points
-            addTransaction(
-                kidID: kid.id,
-                kind: .interest,
-                points: points,
-                note: "Vault interest",
-                currencyAmount: nil
-            )
             didApplyInterest = true
         }
-        if didApplyInterest {
+        guard didApplyInterest else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .interest,
+            points: points,
+            note: "Vault interest",
+            currencyAmount: nil
+        )
+        if persist {
             save()
         }
-        return didApplyInterest
+        return true
     }
 
     func requestInterest(for kid: Kid) {
@@ -216,6 +324,49 @@ final class RewardStore: ObservableObject {
         save()
     }
 
+    func requestChoreCompletion(task: RewardTask, for kid: Kid) {
+        guard state.settings.approvalFlowEnabled,
+              task.isAssigned(to: kid.id),
+              isTaskAvailable(task, for: kid) else {
+            return
+        }
+        addApprovalRequest(
+            kidID: kid.id,
+            kind: .choreCompleted,
+            points: task.points,
+            note: "Chore: \(task.title)",
+            taskID: task.id
+        )
+        save()
+    }
+
+    func requestDeposit(points: Int, for kid: Kid) {
+        guard state.settings.approvalFlowEnabled, points > 0 else { return }
+        let amount = min(points, kid.availablePoints)
+        guard amount > 0 else { return }
+        addApprovalRequest(
+            kidID: kid.id,
+            kind: .vaultDeposit,
+            points: amount,
+            note: "Vault deposit request"
+        )
+        save()
+    }
+
+    func pendingApprovalRequest(
+        kind: ApprovalRequest.Kind,
+        kidID: UUID,
+        taskID: UUID? = nil
+    ) -> ApprovalRequest? {
+        state.approvalRequests.first { request in
+            guard request.kidID == kidID, request.kind == kind else { return false }
+            if let taskID {
+                return request.taskID == taskID
+            }
+            return request.taskID == nil
+        }
+    }
+
     func interestPoints(for kid: Kid) -> Int {
         let interest = Decimal(kid.vaultPoints) * state.settings.vaultInterestRate
         return NSDecimalNumber(decimal: interest).rounding(accordingToBehavior: nil).intValue
@@ -225,20 +376,23 @@ final class RewardStore: ObservableObject {
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
         guard requestedPoints != 0 else { return }
 
+        var appliedPoints = 0
         updateKid(kid.id) { current in
             let points = requestedPoints < 0
                 ? -min(abs(requestedPoints), current.availablePoints)
                 : requestedPoints
             guard points != 0 else { return }
+            appliedPoints = points
             current.availablePoints += points
-            addTransaction(
-                kidID: kid.id,
-                kind: .adjusted,
-                points: points,
-                note: trimmedNote.isEmpty ? "Manual adjustment" : trimmedNote,
-                currencyAmount: nil
-            )
         }
+        guard appliedPoints != 0 else { return }
+        addTransaction(
+            kidID: kid.id,
+            kind: .adjusted,
+            points: appliedPoints,
+            note: trimmedNote.isEmpty ? "Manual adjustment" : trimmedNote,
+            currencyAmount: nil
+        )
         save()
     }
 
@@ -307,7 +461,10 @@ final class RewardStore: ObservableObject {
         currencyPerPoint: Decimal,
         vaultInterestRate: Decimal,
         allowancePoints: Int? = nil,
-        allowanceRecurrence: RewardTask.Recurrence? = nil
+        allowanceRecurrence: RewardTask.Recurrence? = nil,
+        interestRecurrence: RewardTask.Recurrence? = nil,
+        notificationsEnabled: Bool? = nil,
+        iCloudAutoSyncEnabled: Bool? = nil
     ) {
         let normalizedCurrency = currencyCode
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -322,27 +479,80 @@ final class RewardStore: ObservableObject {
             approvalFlowEnabled: state.settings.approvalFlowEnabled,
             allowancePoints: max(allowancePoints ?? state.settings.allowancePoints, 0),
             allowanceRecurrence: allowanceRecurrence ?? state.settings.allowanceRecurrence,
-            lastAllowanceAppliedAt: state.settings.lastAllowanceAppliedAt
+            lastAllowanceAppliedAt: state.settings.lastAllowanceAppliedAt,
+            interestRecurrence: interestRecurrence ?? state.settings.interestRecurrence,
+            lastInterestAppliedAt: state.settings.lastInterestAppliedAt,
+            notificationsEnabled: notificationsEnabled ?? state.settings.notificationsEnabled,
+            iCloudAutoSyncEnabled: iCloudAutoSyncEnabled ?? state.settings.iCloudAutoSyncEnabled
         )
         save()
+        RewardNotifications.reschedule(using: self)
     }
 
     func applyAllowanceToAllKids(at date: Date = Date()) {
-        let points = state.settings.allowancePoints
-        guard points > 0 else { return }
+        guard !state.kids.isEmpty else { return }
+
+        if state.settings.approvalFlowEnabled {
+            var queuedAny = false
+            for kid in state.kids where allowancePoints(for: kid) > 0 {
+                if requestAllowance(points: allowancePoints(for: kid), for: kid) {
+                    queuedAny = true
+                }
+            }
+            guard queuedAny else { return }
+            save()
+            return
+        }
 
         for index in state.kids.indices {
-            state.kids[index].availablePoints += points
-            addTransaction(
-                kidID: state.kids[index].id,
-                kind: .earned,
-                points: points,
-                note: "Allowance",
-                currencyAmount: nil
-            )
+            let points = allowancePoints(for: state.kids[index])
+            guard points > 0 else { continue }
+            applyAllowancePoints(points, toKidAt: index, date: date)
         }
         state.settings.lastAllowanceAppliedAt = date
         save()
+    }
+
+    func applyAllowance(to kid: Kid, at date: Date = Date()) {
+        let points = allowancePoints(for: kid)
+        guard points > 0,
+              let index = state.kids.firstIndex(where: { $0.id == kid.id }) else {
+            return
+        }
+        if state.settings.approvalFlowEnabled {
+            if requestAllowance(points: points, for: kid) {
+                save()
+            }
+            return
+        }
+        applyAllowancePoints(points, toKidAt: index, date: date)
+        save()
+    }
+
+    @discardableResult
+    func requestAllowance(points: Int, for kid: Kid) -> Bool {
+        guard state.settings.approvalFlowEnabled else { return false }
+        let amount = max(points, 0)
+        guard amount > 0 else { return false }
+        addApprovalRequest(
+            kidID: kid.id,
+            kind: .allowance,
+            points: amount,
+            note: "Allowance request"
+        )
+        return true
+    }
+
+    private func applyAllowancePoints(_ points: Int, toKidAt index: Int, date: Date) {
+        state.kids[index].availablePoints += points
+        addTransaction(
+            kidID: state.kids[index].id,
+            kind: .earned,
+            points: points,
+            note: "Allowance",
+            currencyAmount: nil,
+            date: date
+        )
     }
 
     @discardableResult
@@ -350,30 +560,145 @@ final class RewardStore: ObservableObject {
         let recurrence = state.settings.allowanceRecurrence
         guard recurrence != .none,
               !state.kids.isEmpty,
-              state.settings.allowancePoints > 0 else {
+              state.kids.contains(where: { allowancePoints(for: $0) > 0 }) else {
             return false
         }
         if let lastApplied = state.settings.lastAllowanceAppliedAt,
            !isDue(since: lastApplied, recurrence: recurrence, now: now) {
             return false
         }
+
+        if state.settings.approvalFlowEnabled {
+            var queuedAny = false
+            for kid in state.kids {
+                let points = allowancePoints(for: kid)
+                guard points > 0 else { continue }
+                if pendingApprovalRequest(kind: .allowance, kidID: kid.id) != nil {
+                    continue
+                }
+                if requestAllowance(points: points, for: kid) {
+                    queuedAny = true
+                }
+            }
+            guard queuedAny else { return false }
+            state.settings.lastAllowanceAppliedAt = now
+            save()
+            RewardNotifications.reschedule(using: self)
+            return true
+        }
+
         applyAllowanceToAllKids(at: now)
+        RewardNotifications.reschedule(using: self)
         return true
     }
 
-    func updateParentPIN(_ pin: String) {
-        let trimmed = pin.trimmingCharacters(in: .whitespacesAndNewlines)
-        objectWillChange.send()
-        if trimmed.isEmpty {
-            pinManager.clear()
-        } else {
-            pinManager.save(pin: String(trimmed.prefix(12)))
+    @discardableResult
+    func applyDueInterestIfNeeded(now: Date = Date()) -> Bool {
+        let recurrence = state.settings.interestRecurrence
+        guard recurrence != .none, !state.kids.isEmpty else { return false }
+        if let lastApplied = state.settings.lastInterestAppliedAt,
+           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
+            return false
         }
+
+        var appliedAny = false
+        for kid in state.kids {
+            let points = interestPoints(for: kid)
+            if applyInterest(points: points, to: kid, persist: false) {
+                appliedAny = true
+            }
+        }
+        guard appliedAny else { return false }
+
+        state.settings.lastInterestAppliedAt = now
         save()
+        RewardNotifications.reschedule(using: self)
+        return true
     }
 
-    func verifyParentPIN(_ pin: String) -> Bool {
-        pinManager.verify(pin: pin)
+    func runScheduledMaintenance(now: Date = Date()) {
+        _ = applyDueAllowanceIfNeeded(now: now)
+        _ = applyDueInterestIfNeeded(now: now)
+        if state.settings.iCloudAutoSyncEnabled {
+            _ = pullFromICloudIfNewer()
+        }
+        RewardNotifications.reschedule(using: self)
+    }
+
+    func setNotificationsEnabled(_ isEnabled: Bool) {
+        state.settings.notificationsEnabled = isEnabled
+        save()
+        RewardNotifications.reschedule(using: self)
+    }
+
+    func setICloudAutoSyncEnabled(_ isEnabled: Bool) {
+        state.settings.iCloudAutoSyncEnabled = isEnabled
+        save()
+        if isEnabled {
+            _ = syncToICloud()
+        }
+    }
+
+    func setInterestRecurrence(_ recurrence: RewardTask.Recurrence) {
+        state.settings.interestRecurrence = recurrence
+        save()
+        RewardNotifications.reschedule(using: self)
+    }
+
+    @discardableResult
+    func updateParentPIN(_ pin: String) async -> Bool {
+        let trimmed = pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pinManager = pinManager
+        let didUpdate: Bool
+        if trimmed.isEmpty {
+            didUpdate = await Task.detached(priority: .userInitiated) {
+                pinManager.clear()
+            }.value
+            if didUpdate {
+                hasParentPIN = false
+            }
+        } else {
+            let normalizedPIN = String(trimmed.prefix(12))
+            didUpdate = await Task.detached(priority: .userInitiated) {
+                pinManager.save(pin: normalizedPIN)
+            }.value
+            if didUpdate {
+                hasParentPIN = true
+            }
+        }
+        if didUpdate {
+            clearParentPINLockout()
+            save()
+        } else {
+            persistenceErrorMessage = "Could not update parent PIN."
+        }
+        return didUpdate
+    }
+
+    func verifyParentPIN(_ pin: String, now: Date = Date()) async -> Bool {
+        if isParentPINLockedOut(at: now) {
+            return false
+        }
+        clearExpiredParentPINLockout(now: now)
+
+        let pinManager = pinManager
+        let isValid = await Task.detached(priority: .userInitiated) {
+            pinManager.verify(pin: pin)
+        }.value
+
+        if isValid {
+            clearParentPINLockout()
+            return true
+        }
+
+        guard hasParentPIN else { return false }
+
+        parentPINFailedAttempts += 1
+        if parentPINFailedAttempts >= Self.parentPINMaxFailedAttempts {
+            parentPINLockoutUntil = now.addingTimeInterval(Self.parentPINLockoutDuration)
+            parentPINFailedAttempts = 0
+        }
+        return false
     }
 
     func setApprovalFlowEnabled(_ isEnabled: Bool) {
@@ -394,17 +719,39 @@ final class RewardStore: ObservableObject {
             didApply = cashOutExact(points: currentRequest.points, for: kid)
         case .interest:
             didApply = applyInterest(points: currentRequest.points, to: kid)
+        case .choreCompleted:
+            guard let taskID = currentRequest.taskID,
+                  let task = state.tasks.first(where: { $0.id == taskID }) else {
+                return false
+            }
+            let previousTransactionCount = state.transactions.count
+            award(task: task, to: kid)
+            didApply = state.transactions.count > previousTransactionCount
+        case .vaultDeposit:
+            didApply = depositExact(points: currentRequest.points, for: kid)
+        case .allowance:
+            guard let index = state.kids.firstIndex(where: { $0.id == kid.id }) else {
+                return false
+            }
+            applyAllowancePoints(currentRequest.points, toKidAt: index, date: Date())
+            didApply = true
         }
         guard didApply else { return false }
 
         state.approvalRequests.removeAll { $0.id == currentRequest.id }
         save()
+        RewardNotifications.reschedule(using: self)
         return true
     }
 
     func declineRequest(_ request: ApprovalRequest) {
         state.approvalRequests.removeAll { $0.id == request.id }
         save()
+        RewardNotifications.reschedule(using: self)
+    }
+
+    var pendingApprovalCount: Int {
+        state.approvalRequests.count
     }
 
     func transactions(for kid: Kid) -> [RewardTransaction] {
@@ -437,22 +784,54 @@ final class RewardStore: ObservableObject {
     @discardableResult
     func importStateData(_ data: Data) -> Bool {
         guard let decoded = decodeImportData(data)?.state else { return false }
+        var importedState = decoded
+        let legacyPIN = importedState.settings.legacyParentPIN?.isEmpty == false
+            ? importedState.settings.legacyParentPIN
+            : nil
+        importedState.settings.legacyParentPIN = nil
+
         let previousState = state
-        state = decoded
-        migrateLegacyParentPINIfNeeded()
+        let previousHasParentPIN = hasParentPIN
+        state = importedState
         guard save() else {
             state = previousState
+            hasParentPIN = previousHasParentPIN
             return false
+        }
+        if let legacyPIN {
+            guard pinManager.save(pin: legacyPIN) else {
+                state = previousState
+                hasParentPIN = previousHasParentPIN
+                save()
+                return false
+            }
+            hasParentPIN = true
         }
         return true
     }
 
     @discardableResult
+    func pullFromICloudIfNewer() -> Bool {
+        guard state.settings.iCloudAutoSyncEnabled,
+              let data = iCloudBackupData(),
+              let decoded = decodeImportData(data),
+              decoded.isCloudBackup,
+              let cloudSavedAt = decoded.savedAt else {
+            return false
+        }
+        if let localSavedAt = UserDefaults.standard.object(forKey: lastLocalSaveKey) as? Date,
+           localSavedAt >= cloudSavedAt {
+            return false
+        }
+        return importStateData(data)
+    }
+
+    @discardableResult
     func syncToICloud() -> Bool {
         let envelope = CloudBackupEnvelope(
-            schemaVersion: 2,
+            schemaVersion: 3,
             savedAt: Date(),
-            deviceName: ProcessInfo.processInfo.processName,
+            deviceName: Self.currentDeviceName,
             state: state
         )
         guard let data = try? encoder.encode(envelope),
@@ -496,19 +875,54 @@ final class RewardStore: ObservableObject {
     }
 
     private func isDue(since date: Date, recurrence: RewardTask.Recurrence, now: Date) -> Bool {
-        switch recurrence {
-        case .none:
-            return true
-        case .daily:
-            return Calendar.current.dateComponents([.day], from: date, to: now).day ?? 0 >= 1
-        case .weekly:
-            return Calendar.current.dateComponents([.day], from: date, to: now).day ?? 0 >= 7
+        RecurrenceSchedule.isDue(since: date, recurrence: recurrence, now: now)
+    }
+
+    private func isParentPINLockedOut(at now: Date) -> Bool {
+        guard let parentPINLockoutUntil else { return false }
+        return parentPINLockoutUntil > now
+    }
+
+    private func clearExpiredParentPINLockout(now: Date = Date()) {
+        guard let parentPINLockoutUntil, parentPINLockoutUntil <= now else { return }
+        clearParentPINLockout()
+    }
+
+    private func clearParentPINLockout() {
+        parentPINFailedAttempts = 0
+        parentPINLockoutUntil = nil
+    }
+
+    @discardableResult
+    private func depositExact(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var depositedAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.availablePoints)
+            guard amount > 0 else { return }
+            depositedAmount = amount
+            current.availablePoints -= amount
+            current.vaultPoints += amount
         }
+        guard depositedAmount > 0 else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .deposited,
+            points: depositedAmount,
+            note: "Vault deposit",
+            currencyAmount: nil
+        )
+        save()
+        return true
     }
 
     private func migrateLegacyParentPINIfNeeded() {
         guard let legacyPIN = state.settings.legacyParentPIN, !legacyPIN.isEmpty else { return }
-        pinManager.save(pin: legacyPIN)
+        guard pinManager.save(pin: legacyPIN) else {
+            persistenceErrorMessage = "Could not migrate parent PIN."
+            return
+        }
+        hasParentPIN = true
         state.settings.legacyParentPIN = nil
         save()
     }
@@ -517,7 +931,7 @@ final class RewardStore: ObservableObject {
         switch kind {
         case .adjusted:
             return points
-        case .earned, .deposited, .cashedOut, .interest:
+        case .earned, .deposited, .withdrawn, .cashedOut, .interest:
             return abs(points)
         }
     }
@@ -532,6 +946,9 @@ final class RewardStore: ObservableObject {
         case .deposited:
             nextAvailable -= multiplier * transaction.points
             nextVault += multiplier * transaction.points
+        case .withdrawn:
+            nextAvailable += multiplier * transaction.points
+            nextVault -= multiplier * transaction.points
         case .cashedOut:
             nextAvailable -= multiplier * transaction.points
         case .interest:
@@ -551,7 +968,8 @@ final class RewardStore: ObservableObject {
         kind: RewardTransaction.Kind,
         points: Int,
         note: String,
-        currencyAmount: Decimal?
+        currencyAmount: Decimal?,
+        date: Date = Date()
     ) {
         state.transactions.append(
             RewardTransaction(
@@ -559,7 +977,7 @@ final class RewardStore: ObservableObject {
                 kind: kind,
                 points: points,
                 note: note,
-                date: Date(),
+                date: date,
                 currencyAmount: currencyAmount
             )
         )
@@ -569,10 +987,15 @@ final class RewardStore: ObservableObject {
         kidID: UUID,
         kind: ApprovalRequest.Kind,
         points: Int,
-        note: String
+        note: String,
+        taskID: UUID? = nil
     ) {
         state.approvalRequests.removeAll { existing in
-            existing.kidID == kidID && existing.kind == kind
+            guard existing.kidID == kidID, existing.kind == kind else { return false }
+            if let taskID {
+                return existing.taskID == taskID
+            }
+            return existing.taskID == nil
         }
         state.approvalRequests.append(
             ApprovalRequest(
@@ -580,9 +1003,31 @@ final class RewardStore: ObservableObject {
                 kind: kind,
                 points: points,
                 note: note,
-                date: Date()
+                taskID: taskID
             )
         )
+        RewardNotifications.reschedule(using: self)
+    }
+
+    private func registerICloudObserverIfNeeded() {
+        guard iCloudObserver == nil else { return }
+        iCloudObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.pullFromICloudIfNewer()
+            }
+        }
+    }
+
+    private static var currentDeviceName: String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #else
+        return ProcessInfo.processInfo.hostName
+        #endif
     }
 
     private func decodeImportData(_ data: Data) -> (state: RewardState, savedAt: Date?, deviceName: String?, isCloudBackup: Bool)? {
@@ -596,6 +1041,9 @@ final class RewardStore: ObservableObject {
     }
 
     private func iCloudBackupData() -> Data? {
+        if let debugICloudBackupData {
+            return debugICloudBackupData
+        }
         let cloudStore = NSUbiquitousKeyValueStore.default
         if let json = cloudStore.string(forKey: cloudBackupKey),
            let data = json.data(using: .utf8) {
@@ -611,19 +1059,18 @@ final class RewardStore: ObservableObject {
         updateKid(kid.id) { current in
             guard current.availablePoints >= points else { return }
             current.availablePoints -= points
-            addTransaction(
-                kidID: kid.id,
-                kind: .cashedOut,
-                points: points,
-                note: "Cash out",
-                currencyAmount: Decimal(points) * state.settings.currencyPerPoint
-            )
             didCashOut = true
         }
-        if didCashOut {
-            save()
-        }
-        return didCashOut
+        guard didCashOut else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .cashedOut,
+            points: points,
+            note: "Cash out",
+            currencyAmount: Decimal(points) * state.settings.currencyPerPoint
+        )
+        save()
+        return true
     }
 
     @discardableResult
@@ -632,6 +1079,12 @@ final class RewardStore: ObservableObject {
             let data = try encoder.encode(state)
             try data.write(to: fileURL, options: [.atomic])
             persistenceErrorMessage = nil
+            let savedAt = Date()
+            UserDefaults.standard.set(savedAt, forKey: lastLocalSaveKey)
+            if state.settings.iCloudAutoSyncEnabled {
+                _ = syncToICloud()
+            }
+            RewardNotifications.reschedule(using: self)
             return true
         } catch {
             persistenceErrorMessage = error.localizedDescription

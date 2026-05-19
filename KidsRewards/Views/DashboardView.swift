@@ -63,15 +63,18 @@ struct DashboardView: View {
                         }
                     }
 
-                    Text("1 point = \(Formatters.currency(store.state.settings.currencyPerPoint, code: store.state.settings.currencyCode))")
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    if let pointsPerDollar = store.state.settings.pointsPerDollar {
+                        Text("\(Formatters.decimalInput(pointsPerDollar)) points = \(Formatters.currency(1, code: store.state.settings.currencyCode))")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 42)
                 .padding(.bottom, 20)
             }
+            .kidCoinScroll()
             .kidCoinBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
@@ -159,6 +162,7 @@ private struct EditKidModal: View {
                 Text("Edit Kid")
                     .font(.system(.title2, design: .rounded).weight(.bold))
                 TextField("Name", text: $name)
+                    .kidCoinNameEntry()
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 13)
@@ -213,6 +217,7 @@ private struct AddKidModal: View {
                     .foregroundStyle(KidCoinTheme.mutedText)
 
                 TextField("Name", text: $name)
+                    .kidCoinNameEntry()
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 13)

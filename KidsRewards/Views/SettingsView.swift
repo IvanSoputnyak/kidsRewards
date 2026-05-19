@@ -5,12 +5,13 @@ struct SettingsView: View {
     @EnvironmentObject private var store: RewardStore
 
     @State private var currencyCode = ""
-    @State private var currencyPerPointText = ""
+    @State private var pointsPerDollarText = ""
     @State private var interestRateText = ""
-    @State private var allowancePointsText = ""
-    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
     @State private var parentPINText = ""
     @State private var approvalFlowEnabled = false
+    @State private var interestRecurrence: RewardTask.Recurrence = .none
+    @State private var notificationsEnabled = true
+    @State private var iCloudAutoSyncEnabled = false
     @State private var saved = false
     @State private var pinSaved = false
     @State private var exportDocument = RewardStateDocument(data: Data())
@@ -30,22 +31,17 @@ struct SettingsView: View {
 
                 SectionCard(title: "Point Value") {
                     SettingsField(label: "Currency code", hint: "ISO code used for formatting") {
-                        TextField("USD", text: $currencyCode)
+                        TextField("USD", text: TextFieldFilters.currencyCode($currencyCode))
                             .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
                             .multilineTextAlignment(.trailing)
                             .frame(width: 86)
                             .fieldPill()
-                            .onChange(of: currencyCode) { _, newValue in
-                                let normalized = String(newValue.uppercased().prefix(3))
-                                if currencyCode != normalized {
-                                    currencyCode = normalized
-                                }
-                            }
                     }
 
-                    SettingsField(label: "Currency per point", hint: "What 1 point is worth when cashing out") {
-                        TextField("1", text: $currencyPerPointText)
-                            .keyboardType(.decimalPad)
+                    SettingsField(label: "Points per dollar", hint: "Example: 10 means 10 points = $1 when cashing out") {
+                        TextField("10", text: $pointsPerDollarText)
+                            .kidCoinDecimalEntry()
                             .multilineTextAlignment(.trailing)
                             .frame(width: 102)
                             .fieldPill()
@@ -55,7 +51,7 @@ struct SettingsView: View {
                 SectionCard(title: "Vault") {
                     SettingsField(label: "Interest rate", hint: "Decimal, 0.05 means 5%") {
                         TextField("0.05", text: $interestRateText)
-                            .keyboardType(.decimalPad)
+                            .kidCoinDecimalEntry()
                             .multilineTextAlignment(.trailing)
                             .frame(width: 102)
                             .fieldPill()
@@ -75,63 +71,61 @@ struct SettingsView: View {
                             .clipShape(Capsule())
                     }
 
-                    Text("Interest is applied manually per tap on a kid's vault, not automatically over time.")
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .lineSpacing(2)
-                }
-
-                SectionCard(title: "Allowance") {
-                    SettingsField(label: "Allowance points", hint: "Manual weekly allowance amount per kid") {
-                        TextField("5", text: $allowancePointsText)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 86)
-                            .fieldPill()
-                            .onChange(of: allowancePointsText) { _, newValue in
-                                let filtered = String(newValue.filter(\.isNumber).prefix(4))
-                                if allowancePointsText != filtered {
-                                    allowancePointsText = filtered
-                                }
-                            }
-                    }
-
-                    PillButton(
-                        title: "Apply Allowance Now",
-                        systemImage: "calendar.badge.plus",
-                        tone: .mint,
-                        disabled: store.state.kids.isEmpty || (Int(allowancePointsText) ?? store.state.settings.allowancePoints) == 0
-                    ) {
-                        saveSettings()
-                        store.applyAllowanceToAllKids()
-                    }
-
-                    Picker("Automatic allowance", selection: $allowanceRecurrence) {
+                    Picker("Automatic interest", selection: $interestRecurrence) {
                         ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
                             Text(option.label).tag(option)
                         }
                     }
                     .pickerStyle(.segmented)
-                    .accessibilityLabel("Automatic allowance recurrence")
+                    .onChange(of: interestRecurrence) { _, newValue in
+                        store.setInterestRecurrence(newValue)
+                    }
 
-                    Text(allowanceStatusText)
+                    Text(interestScheduleText)
                         .font(.caption)
                         .foregroundStyle(KidCoinTheme.mutedText)
+                        .lineSpacing(2)
+                }
+
+                SectionCard(title: "Reminders & Sync") {
+                    Toggle(isOn: $notificationsEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Notifications")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Remind you about allowance, interest, and pending approvals.")
+                                .font(.caption)
+                                .foregroundStyle(KidCoinTheme.mutedText)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(KidCoinTheme.primary)
+                    .onChange(of: notificationsEnabled) { _, newValue in
+                        store.setNotificationsEnabled(newValue)
+                    }
+
+                    Toggle(isOn: $iCloudAutoSyncEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Auto-sync to iCloud")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Push after each save and pull newer backups when the app opens.")
+                                .font(.caption)
+                                .foregroundStyle(KidCoinTheme.mutedText)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(KidCoinTheme.mintText)
+                    .onChange(of: iCloudAutoSyncEnabled) { _, newValue in
+                        store.setICloudAutoSyncEnabled(newValue)
+                    }
                 }
 
                 SectionCard(title: "Parent Safety") {
                     SettingsField(label: "Parent PIN", hint: "Locks the app behind a local parent code") {
-                        SecureField("Optional", text: $parentPINText)
-                            .keyboardType(.numberPad)
+                        SecureField("Optional", text: TextFieldFilters.digitsOnly($parentPINText, limit: 12))
+                            .kidCoinNumericPIN()
                             .multilineTextAlignment(.trailing)
                             .frame(width: 118)
                             .fieldPill()
-                            .onChange(of: parentPINText) { _, newValue in
-                                let filtered = String(newValue.filter(\.isNumber).prefix(12))
-                                if parentPINText != filtered {
-                                    parentPINText = filtered
-                                }
-                            }
                     }
 
                     PillButton(
@@ -265,6 +259,7 @@ struct SettingsView: View {
             .padding(.top, 42)
             .padding(.bottom, 20)
         }
+        .kidCoinScroll()
         .kidCoinBackground()
         .onAppear(perform: loadSettings)
         .fileExporter(
@@ -326,22 +321,22 @@ struct SettingsView: View {
         }
     }
 
+    private var interestScheduleText: String {
+        switch interestRecurrence {
+        case .none:
+            return "Interest is applied manually from each kid's vault screen."
+        case .daily, .weekly:
+            let cadence = interestRecurrence.label.lowercased()
+            if let lastApplied = store.state.settings.lastInterestAppliedAt {
+                return "Interest runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Interest runs \(cadence) the next time the app opens."
+        }
+    }
+
     private var currentInterestLabel: String {
         let rate = Decimal(string: interestRateText) ?? store.state.settings.vaultInterestRate
         return Formatters.percent(rate)
-    }
-
-    private var allowanceStatusText: String {
-        switch allowanceRecurrence {
-        case .none:
-            return "Allowance is manual only."
-        case .daily, .weekly:
-            let cadence = allowanceRecurrence.label.lowercased()
-            if let lastApplied = store.state.settings.lastAllowanceAppliedAt {
-                return "Allowance runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Allowance runs \(cadence) the next time the app opens."
-        }
     }
 
     private var pinButtonTitle: String {
@@ -367,23 +362,31 @@ struct SettingsView: View {
         previewMessage(for: cloudRestorePreview, fallback: "This replaces all local data with the backup currently stored in iCloud key-value storage.")
     }
 
+    private func currencyPerPointFromPointsField() -> Decimal? {
+        guard let pointsPerDollar = Formatters.parseDecimal(pointsPerDollarText) else { return nil }
+        return RewardSettings.currencyPerPoint(pointsPerDollar: pointsPerDollar)
+    }
+
     private func loadSettings() {
         currencyCode = store.state.settings.currencyCode
-        currencyPerPointText = "\(store.state.settings.currencyPerPoint)"
-        interestRateText = "\(store.state.settings.vaultInterestRate)"
-        allowancePointsText = "\(store.state.settings.allowancePoints)"
-        allowanceRecurrence = store.state.settings.allowanceRecurrence
+        if let pointsPerDollar = store.state.settings.pointsPerDollar {
+            pointsPerDollarText = Formatters.decimalInput(pointsPerDollar)
+        } else {
+            pointsPerDollarText = ""
+        }
+        interestRateText = Formatters.decimalInput(store.state.settings.vaultInterestRate)
         parentPINText = ""
         approvalFlowEnabled = store.state.settings.approvalFlowEnabled
+        interestRecurrence = store.state.settings.interestRecurrence
+        notificationsEnabled = store.state.settings.notificationsEnabled
+        iCloudAutoSyncEnabled = store.state.settings.iCloudAutoSyncEnabled
     }
 
     private func saveSettings() {
         store.updateSettings(
             currencyCode: currencyCode,
-            currencyPerPoint: Decimal(string: currencyPerPointText) ?? store.state.settings.currencyPerPoint,
-            vaultInterestRate: Decimal(string: interestRateText) ?? store.state.settings.vaultInterestRate,
-            allowancePoints: Int(allowancePointsText) ?? store.state.settings.allowancePoints,
-            allowanceRecurrence: allowanceRecurrence
+            currencyPerPoint: currencyPerPointFromPointsField() ?? store.state.settings.currencyPerPoint,
+            vaultInterestRate: Formatters.parseDecimal(interestRateText) ?? store.state.settings.vaultInterestRate
         )
         loadSettings()
         saved = true
@@ -393,11 +396,14 @@ struct SettingsView: View {
     }
 
     private func saveParentPIN() {
-        store.updateParentPIN(parentPINText)
-        loadSettings()
-        pinSaved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            pinSaved = false
+        let nextPIN = parentPINText
+        Task {
+            guard await store.updateParentPIN(nextPIN) else { return }
+            loadSettings()
+            pinSaved = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                pinSaved = false
+            }
         }
     }
 
@@ -521,6 +527,12 @@ private struct ApprovalRequestRow: View {
             return "\(request.points) points · \(Formatters.currency(currencyValue, code: currencyCode))"
         case .interest:
             return "\(request.points) interest points"
+        case .choreCompleted:
+            return "\(request.points) points · \(request.note)"
+        case .vaultDeposit:
+            return "\(request.points) points to vault"
+        case .allowance:
+            return "\(request.points) allowance points"
         }
     }
 }
@@ -532,6 +544,12 @@ private extension ApprovalRequest.Kind {
             return "Cash out request"
         case .interest:
             return "Interest request"
+        case .choreCompleted:
+            return "Chore completed"
+        case .vaultDeposit:
+            return "Vault deposit"
+        case .allowance:
+            return "Allowance"
         }
     }
 
@@ -541,6 +559,12 @@ private extension ApprovalRequest.Kind {
             return "banknote"
         case .interest:
             return "percent"
+        case .choreCompleted:
+            return "checkmark.circle"
+        case .vaultDeposit:
+            return "arrow.down.to.line"
+        case .allowance:
+            return "gift"
         }
     }
 }
@@ -559,33 +583,3 @@ private struct SectionCard<Content: View>: View {
     }
 }
 
-private struct SettingsField<Content: View>: View {
-    let label: String
-    let hint: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(label)
-                    .font(.subheadline.weight(.semibold))
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(KidCoinTheme.mutedText)
-            }
-            Spacer()
-            content
-        }
-    }
-}
-
-private extension View {
-    func fieldPill() -> some View {
-        self
-            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(KidCoinTheme.muted)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-}

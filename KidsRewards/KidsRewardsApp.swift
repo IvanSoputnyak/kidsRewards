@@ -3,15 +3,22 @@ import SwiftUI
 @main
 struct KidsRewardsApp: App {
     @StateObject private var store: RewardStore
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         _store = StateObject(wrappedValue: Self.makeStore())
+        RewardNotifications.requestAuthorizationIfNeeded()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppRootView()
                 .environmentObject(store)
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        store.runScheduledMaintenance()
+                    }
+                }
         }
     }
 
@@ -26,18 +33,22 @@ struct KidsRewardsApp: App {
     }
 }
 
-private final class UITestingParentPINManager: ParentPINManaging {
+private final class UITestingParentPINManager: ParentPINManaging, @unchecked Sendable {
     private(set) var hasPIN = false
     private var savedPIN: String?
 
-    func save(pin: String) {
+    @discardableResult
+    func save(pin: String) -> Bool {
         savedPIN = pin
         hasPIN = true
+        return true
     }
 
-    func clear() {
+    @discardableResult
+    func clear() -> Bool {
         savedPIN = nil
         hasPIN = false
+        return true
     }
 
     func verify(pin: String) -> Bool {

@@ -6,6 +6,61 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
     var availablePoints: Int
     var vaultPoints: Int
     var savingsGoal: SavingsGoal?
+    /// When set, overrides the global allowance amount for this kid.
+    var allowancePoints: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case availablePoints
+        case vaultPoints
+        case savingsGoal
+        case allowancePoints
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        availablePoints: Int,
+        vaultPoints: Int,
+        savingsGoal: SavingsGoal? = nil,
+        allowancePoints: Int? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.availablePoints = availablePoints
+        self.vaultPoints = vaultPoints
+        self.savingsGoal = savingsGoal
+        self.allowancePoints = allowancePoints
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        availablePoints = try container.decode(Int.self, forKey: .availablePoints)
+        vaultPoints = try container.decode(Int.self, forKey: .vaultPoints)
+        savingsGoal = try container.decodeIfPresent(SavingsGoal.self, forKey: .savingsGoal)
+        allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(availablePoints, forKey: .availablePoints)
+        try container.encode(vaultPoints, forKey: .vaultPoints)
+        try container.encodeIfPresent(savingsGoal, forKey: .savingsGoal)
+        try container.encodeIfPresent(allowancePoints, forKey: .allowancePoints)
+    }
+
+    var totalPoints: Int {
+        availablePoints + vaultPoints
+    }
+
+    func savingsGoalProgress(toward goal: SavingsGoal) -> Int {
+        min(totalPoints, goal.targetPoints)
+    }
 }
 
 struct SavingsGoal: Codable, Equatable, Hashable {
@@ -35,19 +90,29 @@ struct RewardTask: Identifiable, Codable, Equatable, Hashable {
     var title: String
     var points: Int
     var recurrence: Recurrence
+    /// When empty or nil, the chore is available to every kid.
+    var assignedKidIDs: [UUID]
 
     private enum CodingKeys: String, CodingKey {
         case id
         case title
         case points
         case recurrence
+        case assignedKidIDs
     }
 
-    init(id: UUID = UUID(), title: String, points: Int, recurrence: Recurrence = .none) {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        points: Int,
+        recurrence: Recurrence = .none,
+        assignedKidIDs: [UUID] = []
+    ) {
         self.id = id
         self.title = title
         self.points = points
         self.recurrence = recurrence
+        self.assignedKidIDs = assignedKidIDs
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +121,11 @@ struct RewardTask: Identifiable, Codable, Equatable, Hashable {
         title = try container.decode(String.self, forKey: .title)
         points = try container.decode(Int.self, forKey: .points)
         recurrence = try container.decodeIfPresent(Recurrence.self, forKey: .recurrence) ?? .none
+        assignedKidIDs = try container.decodeIfPresent([UUID].self, forKey: .assignedKidIDs) ?? []
+    }
+
+    func isAssigned(to kidID: UUID) -> Bool {
+        assignedKidIDs.isEmpty || assignedKidIDs.contains(kidID)
     }
 }
 
@@ -67,6 +137,10 @@ struct RewardSettings: Codable, Equatable {
     var allowancePoints: Int
     var allowanceRecurrence: RewardTask.Recurrence
     var lastAllowanceAppliedAt: Date?
+    var interestRecurrence: RewardTask.Recurrence
+    var lastInterestAppliedAt: Date?
+    var notificationsEnabled: Bool
+    var iCloudAutoSyncEnabled: Bool
     var legacyParentPIN: String?
 
     static let defaults = RewardSettings(
@@ -77,6 +151,10 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints: 5,
         allowanceRecurrence: .none,
         lastAllowanceAppliedAt: nil,
+        interestRecurrence: .none,
+        lastInterestAppliedAt: nil,
+        notificationsEnabled: true,
+        iCloudAutoSyncEnabled: false,
         legacyParentPIN: nil
     )
 
@@ -89,6 +167,10 @@ struct RewardSettings: Codable, Equatable {
         case allowancePoints
         case allowanceRecurrence
         case lastAllowanceAppliedAt
+        case interestRecurrence
+        case lastInterestAppliedAt
+        case notificationsEnabled
+        case iCloudAutoSyncEnabled
     }
 
     init(
@@ -99,6 +181,10 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints: Int = 5,
         allowanceRecurrence: RewardTask.Recurrence = .none,
         lastAllowanceAppliedAt: Date? = nil,
+        interestRecurrence: RewardTask.Recurrence = .none,
+        lastInterestAppliedAt: Date? = nil,
+        notificationsEnabled: Bool = true,
+        iCloudAutoSyncEnabled: Bool = false,
         legacyParentPIN: String? = nil
     ) {
         self.currencyCode = currencyCode
@@ -108,6 +194,10 @@ struct RewardSettings: Codable, Equatable {
         self.allowancePoints = allowancePoints
         self.allowanceRecurrence = allowanceRecurrence
         self.lastAllowanceAppliedAt = lastAllowanceAppliedAt
+        self.interestRecurrence = interestRecurrence
+        self.lastInterestAppliedAt = lastInterestAppliedAt
+        self.notificationsEnabled = notificationsEnabled
+        self.iCloudAutoSyncEnabled = iCloudAutoSyncEnabled
         self.legacyParentPIN = legacyParentPIN
     }
 
@@ -120,6 +210,10 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints) ?? 5
         allowanceRecurrence = try container.decodeIfPresent(RewardTask.Recurrence.self, forKey: .allowanceRecurrence) ?? .none
         lastAllowanceAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastAllowanceAppliedAt)
+        interestRecurrence = try container.decodeIfPresent(RewardTask.Recurrence.self, forKey: .interestRecurrence) ?? .none
+        lastInterestAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastInterestAppliedAt)
+        notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        iCloudAutoSyncEnabled = try container.decodeIfPresent(Bool.self, forKey: .iCloudAutoSyncEnabled) ?? false
         legacyParentPIN = try container.decodeIfPresent(String.self, forKey: .parentPIN)
     }
 
@@ -132,6 +226,21 @@ struct RewardSettings: Codable, Equatable {
         try container.encode(allowancePoints, forKey: .allowancePoints)
         try container.encode(allowanceRecurrence, forKey: .allowanceRecurrence)
         try container.encodeIfPresent(lastAllowanceAppliedAt, forKey: .lastAllowanceAppliedAt)
+        try container.encode(interestRecurrence, forKey: .interestRecurrence)
+        try container.encodeIfPresent(lastInterestAppliedAt, forKey: .lastInterestAppliedAt)
+        try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
+        try container.encode(iCloudAutoSyncEnabled, forKey: .iCloudAutoSyncEnabled)
+    }
+
+    /// How many points equal one unit of currency (e.g. 10 means 10 points = $1).
+    var pointsPerDollar: Decimal? {
+        guard currencyPerPoint > 0 else { return nil }
+        return Decimal(1) / currencyPerPoint
+    }
+
+    static func currencyPerPoint(pointsPerDollar: Decimal) -> Decimal? {
+        guard pointsPerDollar > 0 else { return nil }
+        return Decimal(1) / pointsPerDollar
     }
 }
 
@@ -139,6 +248,7 @@ struct RewardTransaction: Identifiable, Codable, Equatable {
     enum Kind: String, Codable {
         case earned
         case deposited
+        case withdrawn
         case cashedOut
         case interest
         case adjusted
@@ -158,6 +268,8 @@ struct RewardTransaction: Identifiable, Codable, Equatable {
             return "-\(points)"
         case .deposited:
             return "moved \(points)"
+        case .withdrawn:
+            return "+\(points)"
         case .adjusted:
             return points < 0 ? "\(points)" : "+\(points)"
         case .earned, .interest:
@@ -170,6 +282,9 @@ struct ApprovalRequest: Identifiable, Codable, Equatable {
     enum Kind: String, Codable {
         case cashOut
         case interest
+        case choreCompleted
+        case vaultDeposit
+        case allowance
     }
 
     var id = UUID()
@@ -178,6 +293,57 @@ struct ApprovalRequest: Identifiable, Codable, Equatable {
     var points: Int
     var note: String
     var date: Date
+    var taskID: UUID?
+
+    init(
+        id: UUID = UUID(),
+        kidID: UUID,
+        kind: Kind,
+        points: Int,
+        note: String,
+        date: Date = Date(),
+        taskID: UUID? = nil
+    ) {
+        self.id = id
+        self.kidID = kidID
+        self.kind = kind
+        self.points = points
+        self.note = note
+        self.date = date
+        self.taskID = taskID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kidID = try container.decode(UUID.self, forKey: .kidID)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        points = try container.decode(Int.self, forKey: .points)
+        note = try container.decode(String.self, forKey: .note)
+        date = try container.decodeIfPresent(Date.self, forKey: .date) ?? Date()
+        taskID = try container.decodeIfPresent(UUID.self, forKey: .taskID)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kidID
+        case kind
+        case points
+        case note
+        case date
+        case taskID
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kidID, forKey: .kidID)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(points, forKey: .points)
+        try container.encode(note, forKey: .note)
+        try container.encode(date, forKey: .date)
+        try container.encodeIfPresent(taskID, forKey: .taskID)
+    }
 }
 
 struct TaskCompletion: Identifiable, Codable, Equatable {
@@ -247,6 +413,16 @@ struct RewardState: Codable, Equatable {
         taskCompletions = try container.decodeIfPresent([TaskCompletion].self, forKey: .taskCompletions) ?? []
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kids, forKey: .kids)
+        try container.encode(tasks, forKey: .tasks)
+        try container.encode(settings, forKey: .settings)
+        try container.encode(transactions, forKey: .transactions)
+        try container.encode(approvalRequests, forKey: .approvalRequests)
+        try container.encode(taskCompletions, forKey: .taskCompletions)
+    }
+
     static let empty = RewardState(
         kids: [],
         tasks: [],
@@ -256,19 +432,64 @@ struct RewardState: Codable, Equatable {
         taskCompletions: []
     )
 
-    static let sample = RewardState(
-        kids: [
-            Kid(name: "Avery", availablePoints: 12, vaultPoints: 20),
-            Kid(name: "Milo", availablePoints: 5, vaultPoints: 0)
-        ],
-        tasks: [
-            RewardTask(title: "Mow the lawn", points: 5),
-            RewardTask(title: "Clean bedroom", points: 3),
-            RewardTask(title: "Help with dishes", points: 2)
-        ],
-        settings: .defaults,
-        transactions: [],
-        approvalRequests: [],
-        taskCompletions: []
-    )
+}
+
+enum RecurrenceSchedule {
+    static let calendarWeekFirstWeekday = 1
+
+    static func configuredCalendar(from base: Calendar = .current) -> Calendar {
+        var calendar = base
+        calendar.firstWeekday = calendarWeekFirstWeekday
+        return calendar
+    }
+
+    static func isDue(since lastOccurrence: Date, recurrence: RewardTask.Recurrence, now: Date, calendar: Calendar = .current) -> Bool {
+        let calendar = configuredCalendar(from: calendar)
+        switch recurrence {
+        case .none:
+            return true
+        case .daily:
+            let lastDay = calendar.startOfDay(for: lastOccurrence)
+            let nowDay = calendar.startOfDay(for: now)
+            return nowDay > lastDay
+        case .weekly:
+            return startOfWeek(for: now, calendar: calendar) > startOfWeek(for: lastOccurrence, calendar: calendar)
+        }
+    }
+
+    static func startOfWeek(for date: Date, calendar: Calendar = .current) -> Date {
+        let calendar = configuredCalendar(from: calendar)
+        return calendar.dateInterval(of: .weekOfYear, for: date)?.start ?? calendar.startOfDay(for: date)
+    }
+
+    static func nextOccurrence(after lastOccurrence: Date?, recurrence: RewardTask.Recurrence, from now: Date, calendar: Calendar = .current) -> Date? {
+        let calendar = configuredCalendar(from: calendar)
+        switch recurrence {
+        case .none:
+            return nil
+        case .daily:
+            let anchor = lastOccurrence ?? now
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: anchor)) ?? anchor
+            return max(nextDay, now)
+        case .weekly:
+            let anchor = lastOccurrence ?? now
+            let nextWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
+            return max(nextWeek, now)
+        }
+    }
+
+    static func delayUntilNextOccurrence(
+        recurrence: RewardTask.Recurrence,
+        lastApplied: Date?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> TimeInterval? {
+        guard recurrence != .none,
+              let nextDate = nextOccurrence(after: lastApplied, recurrence: recurrence, from: now, calendar: calendar) else {
+            return nil
+        }
+        return max(nextDate.timeIntervalSince(now), minimumSchedulingDelay)
+    }
+
+    static let minimumSchedulingDelay: TimeInterval = 60
 }

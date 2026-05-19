@@ -2,9 +2,11 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: RewardStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .kids
     @State private var isParentUnlocked = false
     @State private var isChildMode = false
+    @State private var biometricsAvailable = false
     @State private var pinEntry = ""
     @State private var pinError = ""
 
@@ -38,13 +40,25 @@ struct ContentView: View {
                 ParentPINGate(
                     pinEntry: $pinEntry,
                     errorMessage: pinError,
+                    isLockedOut: store.isParentPINLockedOut,
+                    lockoutRemainingSeconds: store.parentPINLockoutRemainingSeconds(),
                     onUnlock: {
-                        if store.verifyParentPIN(pinEntry) {
-                            pinEntry = ""
-                            pinError = ""
-                            isParentUnlocked = true
-                        } else {
-                            pinError = "Incorrect PIN"
+                        let enteredPIN = pinEntry
+                        Task {
+                            if store.isParentPINLockedOut {
+                                pinError = parentPINLockoutMessage()
+                                return
+                            }
+                            if await store.verifyParentPIN(enteredPIN) {
+                                pinEntry = ""
+                                pinError = ""
+                                isParentUnlocked = true
+                            } else if store.isParentPINLockedOut {
+                                pinEntry = ""
+                                pinError = parentPINLockoutMessage()
+                            } else {
+                                pinError = "Incorrect PIN"
+                            }
                         }
                     },
                     onEnterChildMode: {
@@ -62,31 +76,62 @@ struct ContentView: View {
                                 pinError = "Biometric unlock failed"
                             }
                         }
-                    }
+                    },
+                    biometricsAvailable: biometricsAvailable
                 )
                 .transition(.opacity)
             }
         }
+        .onAppear {
+            biometricsAvailable = ParentBiometricUnlock.isAvailable
+            isParentUnlocked = !store.hasParentPIN
+        }
         .animation(.easeOut(duration: 0.18), value: isParentUnlocked)
         .animation(.easeOut(duration: 0.18), value: isChildMode)
+        .onChange(of: selectedTab) { _, _ in
+            KidCoinKeyboard.dismiss()
+        }
         .onChange(of: store.hasParentPIN) { _, hasPIN in
             isParentUnlocked = !hasPIN
+            biometricsAvailable = ParentBiometricUnlock.isAvailable
             pinEntry = ""
             pinError = ""
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active, store.hasParentPIN, !isChildMode else { return }
+            isParentUnlocked = false
+            pinEntry = ""
+            pinError = ""
+        }
+        .dismissKeyboardOnTapOutside()
+    }
+
+    private func parentPINLockoutMessage() -> String {
+        let seconds = store.parentPINLockoutRemainingSeconds()
+        return seconds > 0
+            ? "Too many attempts. Try again in \(seconds)s."
+            : "Too many attempts. Try again shortly."
     }
 }
 
 private struct ParentPINGate: View {
     @Binding var pinEntry: String
     let errorMessage: String
+    let isLockedOut: Bool
+    let lockoutRemainingSeconds: Int
     let onUnlock: () -> Void
     let onEnterChildMode: () -> Void
     let onBiometricUnlock: () -> Void
+    let biometricsAvailable: Bool
 
     var body: some View {
         ZStack {
-            KidCoinTheme.background.ignoresSafeArea()
+            KidCoinTheme.background
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    KidCoinKeyboard.dismiss()
+                }
 
             VStack(alignment: .leading, spacing: 16) {
                 Image(systemName: "lock.shield.fill")
@@ -101,20 +146,13 @@ private struct ParentPINGate: View {
                     .foregroundStyle(KidCoinTheme.mutedText)
                     .lineSpacing(2)
 
-                SecureField("PIN", text: $pinEntry)
-                    .keyboardType(.numberPad)
-                    .textContentType(.password)
+                SecureField("PIN", text: TextFieldFilters.digitsOnly($pinEntry, limit: 12))
+                    .kidCoinNumericPIN()
                     .font(.system(.title3, design: .monospaced).weight(.bold))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 13)
                     .background(KidCoinTheme.muted)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .onChange(of: pinEntry) { _, newValue in
-                        let filtered = newValue.filter(\.isNumber)
-                        if filtered != newValue {
-                            pinEntry = filtered
-                        }
-                    }
 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -126,12 +164,12 @@ private struct ParentPINGate: View {
                     title: "Unlock",
                     systemImage: "lock.open.fill",
                     tone: .primary,
-                    disabled: pinEntry.isEmpty
+                    disabled: pinEntry.isEmpty || isLockedOut
                 ) {
                     onUnlock()
                 }
 
-                if ParentBiometricUnlock.isAvailable {
+                if biometricsAvailable {
                     PillButton(
                         title: "Use Face ID / Touch ID",
                         systemImage: "faceid",
@@ -161,6 +199,16 @@ private struct ChildModeView: View {
     @EnvironmentObject private var store: RewardStore
     let onExit: () -> Void
 
+    @State private var selectedKidID: UUID?
+
+    private var selectedKid: Kid? {
+        if let selectedKidID,
+           let kid = store.state.kids.first(where: { $0.id == selectedKidID }) {
+            return kid
+        }
+        return store.state.kids.first
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -183,77 +231,370 @@ private struct ChildModeView: View {
                         title: "No kids yet",
                         message: "Ask a parent to add a profile."
                     )
-                } else {
-                    VStack(spacing: 12) {
-                        ForEach(store.state.kids) { kid in
-                            childCard(for: kid)
+                } else if let selectedKid {
+                    if store.state.kids.count > 1 {
+                        Picker("Profile", selection: Binding(
+                            get: { selectedKid.id },
+                            set: { selectedKidID = $0 }
+                        )) {
+                            ForEach(store.state.kids) { kid in
+                                Text(kid.name).tag(kid.id)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Choose profile")
                     }
+
+                    ChildKidCard(kid: selectedKid)
+                }
+
+                if !store.state.kids.isEmpty && !store.state.settings.approvalFlowEnabled {
+                    Text("Ask a parent to turn on approval flow in Settings before submitting chores or money requests.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                        .lineSpacing(2)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.top, 42)
             .padding(.bottom, 24)
         }
+        .kidCoinScroll()
         .kidCoinBackground()
+        .onAppear {
+            if selectedKidID == nil {
+                selectedKidID = store.state.kids.first?.id
+            }
+        }
+        .onChange(of: store.state.kids.map(\.id)) { _, kidIDs in
+            guard let selectedKidID, kidIDs.contains(selectedKidID) else {
+                self.selectedKidID = kidIDs.first
+                return
+            }
+        }
+    }
+}
+
+private struct ChildKidCard: View {
+    @EnvironmentObject private var store: RewardStore
+    let kid: Kid
+
+    @State private var depositPoints = 1
+    @State private var cashOutPoints = 1
+    @State private var isHistoryExpanded = false
+
+    private var approvalFlowEnabled: Bool {
+        store.state.settings.approvalFlowEnabled
     }
 
-    private func childCard(for kid: Kid) -> some View {
+    private var interestPoints: Int {
+        store.interestPoints(for: kid)
+    }
+
+    private var transactions: [RewardTransaction] {
+        store.transactions(for: kid)
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(kid.name)
-                        .font(.title3.weight(.bold))
-                    Text("\(kid.availablePoints) available · \(kid.vaultPoints) vault")
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                }
-                Spacer()
-            }
-
-            if let goal = kid.savingsGoal {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(goal.title)
-                        .font(.caption.weight(.bold))
-                    ProgressView(value: Double(min(kid.vaultPoints, goal.targetPoints)), total: Double(goal.targetPoints))
-                        .tint(KidCoinTheme.mintText)
-                }
-            }
-
-            if !store.state.settings.approvalFlowEnabled {
-                Text("Ask a parent to turn on approval flow before requesting money actions.")
-                    .font(.caption)
-                    .foregroundStyle(KidCoinTheme.mutedText)
-            }
-
-            HStack(spacing: 10) {
-                Button("Request Cash Out") {
-                    store.requestCashOut(points: kid.availablePoints, for: kid)
-                }
-                .disabled(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0)
-                .font(.caption.weight(.bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0 ? KidCoinTheme.muted : KidCoinTheme.primary)
-                .foregroundStyle(!store.state.settings.approvalFlowEnabled || kid.availablePoints == 0 ? KidCoinTheme.mutedText : .white)
-                .clipShape(Capsule())
-
-                Button("Request Interest") {
-                    store.requestInterest(for: kid)
-                }
-                .disabled(!store.state.settings.approvalFlowEnabled || store.interestPoints(for: kid) == 0)
-                .font(.caption.weight(.bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(KidCoinTheme.muted)
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
+            headerSection
+            savingsGoalSection
+            choreSection
+            vaultDepositSection
+            moneyActionsSection
+            historySection
         }
         .padding(18)
         .tileCard(cornerRadius: 24)
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(kid.name)
+                .font(.title3.weight(.bold))
+            Text("\(kid.availablePoints) available · \(kid.vaultPoints) vault")
+                .font(.caption)
+                .foregroundStyle(KidCoinTheme.mutedText)
+            Text("Cash value: \(Formatters.currency(store.currencyValue(for: kid.availablePoints), code: store.state.settings.currencyCode))")
+                .font(.caption2)
+                .foregroundStyle(KidCoinTheme.mutedText)
+        }
+    }
+
+    @ViewBuilder
+    private var savingsGoalSection: some View {
+        if let goal = kid.savingsGoal {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(goal.title)
+                    .font(.caption.weight(.bold))
+                ProgressView(
+                    value: Double(kid.savingsGoalProgress(toward: goal)),
+                    total: Double(goal.targetPoints)
+                )
+                .tint(KidCoinTheme.mintText)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var choreSection: some View {
+        let chores = store.tasks(for: kid)
+        if !chores.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Award work")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                Text("Tap a chore when you finish it. A parent approves before points are added.")
+                    .font(.caption2)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                ForEach(chores) { task in
+                    choreRow(for: task)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var vaultDepositSection: some View {
+        if approvalFlowEnabled {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Save to vault")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                HStack {
+                    Text("Deposit")
+                        .font(.caption)
+                    Spacer()
+                    CounterControl(
+                        value: $depositPoints,
+                        range: 1...max(kid.availablePoints, 1)
+                    )
+                }
+                Button {
+                    store.requestDeposit(points: depositPoints, for: kid)
+                    depositPoints = 1
+                } label: {
+                    Text(depositPending ? "Deposit pending" : "Request vault deposit")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(depositPending || kid.availablePoints == 0 ? KidCoinTheme.muted : KidCoinTheme.mint.opacity(0.35))
+                        .foregroundStyle(depositPending || kid.availablePoints == 0 ? KidCoinTheme.mutedText : KidCoinTheme.mintText)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(depositPending || kid.availablePoints == 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var moneyActionsSection: some View {
+        if approvalFlowEnabled {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Money actions")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                Text("Cash out is a ledger entry. A parent pays you the shown amount separately.")
+                    .font(.caption2)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                HStack {
+                    Text("Cash out")
+                        .font(.caption)
+                    Spacer()
+                    CounterControl(
+                        value: $cashOutPoints,
+                        range: 1...max(kid.availablePoints, 1)
+                    )
+                }
+                Button {
+                    store.requestCashOut(points: cashOutPoints, for: kid)
+                    cashOutPoints = 1
+                } label: {
+                    Text(cashOutPending ? "Cash out pending" : cashOutRequestButtonTitle)
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(cashOutDisabled ? KidCoinTheme.muted : KidCoinTheme.primary)
+                        .foregroundStyle(cashOutDisabled ? KidCoinTheme.mutedText : .white)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(cashOutDisabled)
+
+                Button {
+                    store.requestInterest(for: kid)
+                } label: {
+                    Text(interestPending ? "Interest pending" : "Request interest")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(interestDisabled ? KidCoinTheme.muted : KidCoinTheme.muted.opacity(0.65))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(interestDisabled)
+            }
+        }
+    }
+
+    private var cashOutRequestButtonTitle: String {
+        let amount = min(cashOutPoints, kid.availablePoints)
+        let value = Formatters.currency(
+            store.currencyValue(for: amount),
+            code: store.state.settings.currencyCode
+        )
+        return "Request cash out \(value)"
+    }
+
+    private var historySection: some View {
+        DisclosureGroup(isExpanded: $isHistoryExpanded) {
+            if transactions.isEmpty {
+                Text("No activity yet.")
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(transactions) { transaction in
+                        ChildTransactionRow(
+                            transaction: transaction,
+                            currencyCode: store.state.settings.currencyCode
+                        )
+                    }
+                }
+                .padding(.top, 4)
+            }
+        } label: {
+            Text("History (\(transactions.count))")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(KidCoinTheme.foreground)
+        }
+        .tint(KidCoinTheme.primary)
+    }
+
+    private var depositPending: Bool {
+        store.pendingApprovalRequest(kind: .vaultDeposit, kidID: kid.id) != nil
+    }
+
+    private var cashOutPending: Bool {
+        store.pendingApprovalRequest(kind: .cashOut, kidID: kid.id) != nil
+    }
+
+    private var interestPending: Bool {
+        store.pendingApprovalRequest(kind: .interest, kidID: kid.id) != nil
+    }
+
+    private var cashOutDisabled: Bool {
+        !approvalFlowEnabled || kid.availablePoints == 0 || cashOutPending
+    }
+
+    private var interestDisabled: Bool {
+        !approvalFlowEnabled || interestPoints == 0 || interestPending
+    }
+
+    private func choreRow(for task: RewardTask) -> some View {
+        let isAvailable = store.isTaskAvailable(task, for: kid)
+        let isPending = store.pendingApprovalRequest(
+            kind: .choreCompleted,
+            kidID: kid.id,
+            taskID: task.id
+        ) != nil
+
+        return Button {
+            if approvalFlowEnabled, !isPending {
+                store.requestChoreCompletion(task: task, for: kid)
+            }
+        } label: {
+            HStack {
+                Text(task.title)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if isPending {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.mintText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(KidCoinTheme.mint.opacity(0.24))
+                        .clipShape(Capsule())
+                } else {
+                    Text("+\(task.points)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.primary)
+                }
+            }
+        }
+        .disabled(!approvalFlowEnabled || !isAvailable || isPending)
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ChildTransactionRow: View {
+    let transaction: RewardTransaction
+    let currencyCode: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(transaction.note)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(2)
+                Text(detailText)
+                    .font(.caption2)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+            }
+            Spacer()
+            Text(transaction.pointsDisplayLabel)
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(pointsBackground)
+                .foregroundStyle(pointsForeground)
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(KidCoinTheme.muted.opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(kid.name), \(kid.availablePoints) available points, \(kid.vaultPoints) vault points")
+        .accessibilityLabel("\(transaction.note), \(transaction.pointsDisplayLabel)")
+    }
+
+    private var detailText: String {
+        let formattedDate = transaction.date.formatted(date: .abbreviated, time: .omitted)
+        if let amount = transaction.currencyAmount {
+            return "\(formattedDate) · \(Formatters.currency(amount, code: currencyCode))"
+        }
+        return formattedDate
+    }
+
+    private var pointsBackground: Color {
+        switch transaction.kind {
+        case .cashedOut:
+            return KidCoinTheme.destructive.opacity(0.12)
+        case .deposited:
+            return KidCoinTheme.mint.opacity(0.25)
+        case .withdrawn:
+            return KidCoinTheme.primary.opacity(0.2)
+        case .earned, .interest, .adjusted:
+            return KidCoinTheme.primary.opacity(0.12)
+        }
+    }
+
+    private var pointsForeground: Color {
+        switch transaction.kind {
+        case .cashedOut:
+            return KidCoinTheme.destructive
+        case .deposited:
+            return KidCoinTheme.mintText
+        case .withdrawn:
+            return KidCoinTheme.primary
+        case .earned, .interest, .adjusted:
+            return KidCoinTheme.primary
+        }
     }
 }
 
