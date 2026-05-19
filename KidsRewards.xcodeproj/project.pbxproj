@@ -70,7 +70,6 @@
 		B20000000000000000000000 /* KidsRewardsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KidsRewardsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000001 /* KidsRewardsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidsRewardsUITests.swift; sourceTree = "<group>"; };
 		A20000000000000000000014 /* RewardNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/RewardNotifications.swift; sourceTree = "<group>"; };
-		A20000000000000000000015 /* KidsRewards.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KidsRewards.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,7 +117,6 @@
 				A20000000000000000000003 /* RewardStore.swift */,
 				A20000000000000000000014 /* RewardNotifications.swift */,
 				A2000000000000000000000D /* ParentPINSecurity.swift */,
-				A20000000000000000000015 /* KidsRewards.entitlements */,
 				A20000000000000000000004 /* Formatters.swift */,
 				A20000000000000000000005 /* ContentView.swift */,
 				A20000000000000000000006 /* DashboardView.swift */,
@@ -462,7 +460,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = KidsRewards/KidsRewards.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
@@ -494,7 +491,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = KidsRewards/KidsRewards.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";

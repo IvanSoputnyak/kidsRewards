@@ -202,7 +202,7 @@ _All items from the former batch (per-kid assignment UX, child profile picker, d
 
 | Gap | Notes |
 |-----|--------|
-| No iCloud entitlements in project | Code uses `NSUbiquitousKeyValueStore`; capability may need to be enabled in Xcode for device builds. |
+| iCloud requires paid Apple Developer Program | Personal/free teams cannot use the iCloud KV entitlement. The project ships with an empty entitlements plist so device builds succeed; re-add `com.apple.developer.ubiquity-kvstore-identifier` in Xcode when using a paid team. |
 | iCloud KV size limits | Large histories may approach key-value storage practical limits (~1 MB). |
 | Import is destructive replace | No merge, diff, or partial import. |
 | No conflict resolution | Last manual sync wins; no multi-device strategy. |
