@@ -2,8 +2,8 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: RewardStore
+    @EnvironmentObject private var router: AppRouter
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab: AppTab = .kids
     @State private var isParentUnlocked = false
     @State private var isChildMode = false
     @State private var biometricsAvailable = false
@@ -21,7 +21,7 @@ struct ContentView: View {
                 })
             } else {
                 Group {
-                    switch selectedTab {
+                    switch router.selectedTab {
                     case .kids:
                         DashboardView()
                     case .work:
@@ -30,9 +30,9 @@ struct ContentView: View {
                         SettingsView()
                     }
                 }
-                .safeAreaPadding(.bottom, 92)
+                .kidCoinMainTabScreen()
 
-                KidCoinTabBar(selectedTab: $selectedTab)
+                KidCoinTabBar(selectedTab: $router.selectedTab)
             }
         }
         .overlay {
@@ -88,8 +88,13 @@ struct ContentView: View {
         }
         .animation(.easeOut(duration: 0.18), value: isParentUnlocked)
         .animation(.easeOut(duration: 0.18), value: isChildMode)
-        .onChange(of: selectedTab) { _, _ in
+        .onChange(of: router.selectedTab) { _, _ in
             KidCoinKeyboard.dismiss()
+        }
+        .onChange(of: router.requestChildMode) { _, requested in
+            guard requested else { return }
+            isChildMode = true
+            router.requestChildMode = false
         }
         .onChange(of: store.hasParentPIN) { _, hasPIN in
             isParentUnlocked = !hasPIN
@@ -257,7 +262,6 @@ private struct ChildModeView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 42)
-            .padding(.bottom, 24)
         }
         .kidCoinScroll()
         .kidCoinBackground()
@@ -594,28 +598,6 @@ private struct ChildTransactionRow: View {
             return KidCoinTheme.primary
         case .earned, .interest, .adjusted:
             return KidCoinTheme.primary
-        }
-    }
-}
-
-private enum AppTab: CaseIterable {
-    case kids
-    case work
-    case settings
-
-    var title: String {
-        switch self {
-        case .kids: "Kids"
-        case .work: "Work"
-        case .settings: "Settings"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .kids: "person.2.fill"
-        case .work: "checklist"
-        case .settings: "gearshape.fill"
         }
     }
 }

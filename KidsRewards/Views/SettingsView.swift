@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var store: RewardStore
+    @EnvironmentObject private var router: AppRouter
 
     @State private var currencyCode = ""
     @State private var pointsPerDollarText = ""
@@ -25,7 +26,8 @@ struct SettingsView: View {
     @State private var importMessage = ""
 
     var body: some View {
-        ScrollView {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 PageHeader(eyebrow: "Economy", title: "Settings")
 
@@ -87,7 +89,7 @@ struct SettingsView: View {
                         .lineSpacing(2)
                 }
 
-                SectionCard(title: "Reminders & Sync") {
+                SectionCard(title: ICloudBackup.isAvailable ? "Reminders & Sync" : "Reminders") {
                     Toggle(isOn: $notificationsEnabled) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Notifications")
@@ -103,19 +105,21 @@ struct SettingsView: View {
                         store.setNotificationsEnabled(newValue)
                     }
 
-                    Toggle(isOn: $iCloudAutoSyncEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-sync to iCloud")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Push after each save and pull newer backups when the app opens.")
-                                .font(.caption)
-                                .foregroundStyle(KidCoinTheme.mutedText)
+                    if ICloudBackup.isAvailable {
+                        Toggle(isOn: $iCloudAutoSyncEnabled) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Auto-sync to iCloud")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Push after each save and pull newer backups when the app opens.")
+                                    .font(.caption)
+                                    .foregroundStyle(KidCoinTheme.mutedText)
+                            }
                         }
-                    }
-                    .toggleStyle(.switch)
-                    .tint(KidCoinTheme.mintText)
-                    .onChange(of: iCloudAutoSyncEnabled) { _, newValue in
-                        store.setICloudAutoSyncEnabled(newValue)
+                        .toggleStyle(.switch)
+                        .tint(KidCoinTheme.mintText)
+                        .onChange(of: iCloudAutoSyncEnabled) { _, newValue in
+                            store.setICloudAutoSyncEnabled(newValue)
+                        }
                     }
                 }
 
@@ -182,6 +186,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .id("approvalQueue")
 
                 SectionCard(title: "Data") {
                     HStack(spacing: 10) {
@@ -206,33 +211,41 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
 
-                    HStack(spacing: 10) {
-                        Button("Sync to iCloud") {
-                            importMessage = store.syncToICloud()
-                                ? "Synced to iCloud key-value storage."
-                                : "iCloud sync failed."
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(KidCoinTheme.mint.opacity(0.24))
-                        .clipShape(Capsule())
+                    Text(dataBackupFootnote)
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                        .lineSpacing(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Button("Restore iCloud") {
-                            if let preview = store.iCloudBackupPreview() {
-                                cloudRestorePreview = preview
-                                showRestoreConfirmation = true
-                            } else {
-                                importMessage = "No iCloud backup found."
+                    if ICloudBackup.isAvailable {
+                        HStack(spacing: 10) {
+                            Button("Sync to iCloud") {
+                                importMessage = store.syncToICloud()
+                                    ? "Synced to iCloud key-value storage."
+                                    : "iCloud sync failed."
                             }
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(KidCoinTheme.mint.opacity(0.24))
+                            .clipShape(Capsule())
+
+                            Button("Restore iCloud") {
+                                if let preview = store.iCloudBackupPreview() {
+                                    cloudRestorePreview = preview
+                                    showRestoreConfirmation = true
+                                } else {
+                                    importMessage = "No iCloud backup found."
+                                }
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(KidCoinTheme.mint.opacity(0.24))
+                            .clipShape(Capsule())
                         }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(KidCoinTheme.mint.opacity(0.24))
-                        .clipShape(Capsule())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
 
                     if !importMessage.isEmpty {
                         Text(importMessage)
@@ -257,11 +270,18 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 42)
-            .padding(.bottom, 20)
+            }
+            .kidCoinScroll()
+            .kidCoinBackground()
+            .onAppear(perform: loadSettings)
+            .onChange(of: router.focusApprovalsSection) { _, shouldFocus in
+                guard shouldFocus else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    scrollProxy.scrollTo("approvalQueue", anchor: .top)
+                }
+                router.focusApprovalsSection = false
+            }
         }
-        .kidCoinScroll()
-        .kidCoinBackground()
-        .onAppear(perform: loadSettings)
         .fileExporter(
             isPresented: $isExporting,
             document: exportDocument,
@@ -319,6 +339,18 @@ struct SettingsView: View {
         } message: {
             Text(restoreConfirmationMessage)
         }
+        .onAppear {
+            if !ICloudBackup.isAvailable {
+                iCloudAutoSyncEnabled = false
+            }
+        }
+    }
+
+    private var dataBackupFootnote: String {
+        if ICloudBackup.isAvailable {
+            return "Export JSON for a full backup. iCloud sync is optional when enabled above."
+        }
+        return "Free build: data stays on this device. Export JSON to Files or AirDrop to copy to another phone—no subscription or paid Apple developer account required."
     }
 
     private var interestScheduleText: String {

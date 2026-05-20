@@ -744,6 +744,87 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertFalse(store.isParentPINLockedOut)
     }
 
+    func testIsAllowanceScheduleDueWhenRecurrenceEnabledAndNeverApplied() {
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 5,
+            allowanceRecurrence: .weekly
+        )
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)],
+            settings: settings
+        )
+
+        XCTAssertTrue(store.isAllowanceScheduleDue())
+    }
+
+    func testEarnedPointsThisWeekSumsEarnedTransactions() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let now = Date()
+        let calendar = Calendar.current
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
+        let store = makeStore(
+            kids: [kid],
+            transactions: [
+                RewardTransaction(
+                    kidID: kid.id,
+                    kind: .earned,
+                    points: 4,
+                    note: "Chore",
+                    date: weekStart.addingTimeInterval(60),
+                    currencyAmount: nil
+                ),
+                RewardTransaction(
+                    kidID: kid.id,
+                    kind: .cashedOut,
+                    points: 2,
+                    note: "Cash out",
+                    date: weekStart.addingTimeInterval(120),
+                    currencyAmount: 2
+                )
+            ]
+        )
+
+        XCTAssertEqual(store.earnedPointsThisWeek(now: now), 4)
+    }
+
+    func testReadyChoreCountRespectsRecurrence() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Dishes", points: 2, recurrence: .daily)
+        let start = Date(timeIntervalSince1970: 4_102_444_800)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        XCTAssertEqual(store.readyChoreCount(for: kid, now: start), 1)
+        store.award(task: task, to: kid, at: start)
+        XCTAssertEqual(store.readyChoreCount(for: kid, now: start.addingTimeInterval(60 * 60)), 0)
+    }
+
+    func testRecentTransactionsReturnsNewestHouseholdWide() {
+        let kidA = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let kidB = Kid(name: "Milo", availablePoints: 0, vaultPoints: 0)
+        let older = RewardTransaction(
+            kidID: kidA.id,
+            kind: .earned,
+            points: 1,
+            note: "Older",
+            date: Date(timeIntervalSince1970: 1_000),
+            currencyAmount: nil
+        )
+        let newer = RewardTransaction(
+            kidID: kidB.id,
+            kind: .earned,
+            points: 2,
+            note: "Newer",
+            date: Date(timeIntervalSince1970: 2_000),
+            currencyAmount: nil
+        )
+        let store = makeStore(kids: [kidA, kidB], transactions: [older, newer])
+
+        XCTAssertEqual(store.recentTransactions(limit: 1).map(\.note), ["Newer"])
+    }
+
     func testKidAllowancePointsRoundTrip() throws {
         let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, allowancePoints: 12)
         let state = RewardState(kids: [kid], tasks: [], settings: .defaults, transactions: [])
@@ -893,6 +974,9 @@ final class RewardStoreTests: XCTestCase {
     }
 
     func testPullFromICloudIfNewerSkipsWhenAutoSyncDisabled() throws {
+        ICloudBackup.setAvailableForTesting(true)
+        defer { ICloudBackup.setAvailableForTesting(nil) }
+
         let cloudKid = Kid(name: "Cloud", availablePoints: 50, vaultPoints: 0)
         let cloudStore = makeStore(
             kids: [cloudKid],
@@ -912,6 +996,9 @@ final class RewardStoreTests: XCTestCase {
     }
 
     func testPullFromICloudIfNewerImportsWhenCloudBackupIsNewer() throws {
+        ICloudBackup.setAvailableForTesting(true)
+        defer { ICloudBackup.setAvailableForTesting(nil) }
+
         let cloudKid = Kid(name: "Cloud", availablePoints: 50, vaultPoints: 0)
         let cloudStore = makeStore(
             kids: [cloudKid],
@@ -932,6 +1019,9 @@ final class RewardStoreTests: XCTestCase {
     }
 
     func testPullFromICloudIfNewerSkipsWhenLocalSaveIsNewer() throws {
+        ICloudBackup.setAvailableForTesting(true)
+        defer { ICloudBackup.setAvailableForTesting(nil) }
+
         let cloudKid = Kid(name: "Cloud", availablePoints: 50, vaultPoints: 0)
         let cloudStore = makeStore(
             kids: [cloudKid],
@@ -954,11 +1044,28 @@ final class RewardStoreTests: XCTestCase {
     }
 
     func testSetICloudAutoSyncEnabledPersistsInSettings() {
+        ICloudBackup.setAvailableForTesting(true)
+        defer { ICloudBackup.setAvailableForTesting(nil) }
+
         let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
 
         store.setICloudAutoSyncEnabled(true)
 
         XCTAssertTrue(store.state.settings.iCloudAutoSyncEnabled)
+    }
+
+    func testSetICloudAutoSyncIgnoredWhenICloudUnavailable() {
+        ICloudBackup.setAvailableForTesting(false)
+        defer { ICloudBackup.setAvailableForTesting(nil) }
+
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)],
+            settings: settingsWithICloudAutoSync(enabled: true)
+        )
+
+        store.setICloudAutoSyncEnabled(true)
+
+        XCTAssertFalse(store.state.settings.iCloudAutoSyncEnabled)
     }
 
     func testTasksFilterByAssignedKids() {

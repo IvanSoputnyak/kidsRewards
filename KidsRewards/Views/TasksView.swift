@@ -27,8 +27,8 @@ struct TasksView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 42)
-                .padding(.bottom, 20)
             }
+            .kidCoinScroll()
 
             if taskBeingEdited != nil {
                 EditTaskModal(
@@ -64,7 +64,6 @@ struct TasksView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
-        .kidCoinScroll()
         .kidCoinBackground()
         .animation(.easeOut(duration: 0.18), value: taskBeingEdited)
     }

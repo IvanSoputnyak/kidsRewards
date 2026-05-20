@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppRootView: View {
     @EnvironmentObject private var store: RewardStore
+    @StateObject private var router = AppRouter()
     @State private var isShowingLoadingScreen = true
 
     private var isUITesting: Bool {
@@ -12,6 +13,7 @@ struct AppRootView: View {
         ZStack {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(router)
                 .opacity(isShowingLoadingScreen ? 0 : 1)
 
             if isShowingLoadingScreen {

@@ -55,6 +55,7 @@ final class RewardStore: ObservableObject {
             runScheduledMaintenance()
             save()
         }
+        disableICloudBackupIfUnavailable()
         registerICloudObserverIfNeeded()
     }
 
@@ -70,6 +71,95 @@ final class RewardStore: ObservableObject {
 
     var totalVaultPoints: Int {
         state.kids.reduce(0) { $0 + $1.vaultPoints }
+    }
+
+    var totalHouseholdPoints: Int {
+        totalAvailablePoints + totalVaultPoints
+    }
+
+    func kid(withID id: UUID) -> Kid? {
+        state.kids.first { $0.id == id }
+    }
+
+    func kidName(for id: UUID) -> String {
+        kid(withID: id)?.name ?? "Unknown"
+    }
+
+    func isAllowanceScheduleDue(now: Date = Date()) -> Bool {
+        let recurrence = state.settings.allowanceRecurrence
+        guard recurrence != .none,
+              !state.kids.isEmpty,
+              state.kids.contains(where: { allowancePoints(for: $0) > 0 }) else {
+            return false
+        }
+        if let lastApplied = state.settings.lastAllowanceAppliedAt,
+           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
+            return false
+        }
+        return true
+    }
+
+    func isInterestScheduleDue(now: Date = Date()) -> Bool {
+        let recurrence = state.settings.interestRecurrence
+        guard recurrence != .none,
+              state.kids.contains(where: { interestPoints(for: $0) > 0 }) else {
+            return false
+        }
+        if let lastApplied = state.settings.lastInterestAppliedAt,
+           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
+            return false
+        }
+        return true
+    }
+
+    func readyChoreCount(for kid: Kid, now: Date = Date()) -> Int {
+        tasks(for: kid).filter { isTaskAvailable($0, for: kid, now: now) }.count
+    }
+
+    func totalReadyChoreCount(now: Date = Date()) -> Int {
+        state.kids.reduce(0) { $0 + readyChoreCount(for: $1, now: now) }
+    }
+
+    func pendingRequestCount(for kid: Kid) -> Int {
+        state.approvalRequests.filter { $0.kidID == kid.id }.count
+    }
+
+    func recentTransactions(limit: Int = 8, now: Date = Date()) -> [RewardTransaction] {
+        let capped = max(limit, 0)
+        guard capped > 0 else { return [] }
+        return Array(
+            state.transactions
+                .sorted { $0.date > $1.date }
+                .prefix(capped)
+        )
+    }
+
+    func earnedPoints(in interval: DateInterval) -> Int {
+        state.transactions.reduce(into: 0) { total, transaction in
+            guard transaction.kind == .earned,
+                  interval.contains(transaction.date) else {
+                return
+            }
+            total += transaction.points
+        }
+    }
+
+    func earnedPointsThisWeek(now: Date = Date()) -> Int {
+        let calendar = Calendar.current
+        guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start else {
+            return 0
+        }
+        return earnedPoints(in: DateInterval(start: weekStart, end: now))
+    }
+
+    func lastTransaction(for kid: Kid) -> RewardTransaction? {
+        transactions(for: kid).first
+    }
+
+    func lastActivitySummary(for kid: Kid) -> String? {
+        guard let transaction = lastTransaction(for: kid) else { return nil }
+        let relative = transaction.date.formatted(.relative(presentation: .named))
+        return "\(transaction.note) · \(relative)"
     }
 
     func addKid(name: String) {
@@ -619,7 +709,7 @@ final class RewardStore: ObservableObject {
     func runScheduledMaintenance(now: Date = Date()) {
         _ = applyDueAllowanceIfNeeded(now: now)
         _ = applyDueInterestIfNeeded(now: now)
-        if state.settings.iCloudAutoSyncEnabled {
+        if ICloudBackup.isAvailable, state.settings.iCloudAutoSyncEnabled {
             _ = pullFromICloudIfNewer()
         }
         RewardNotifications.reschedule(using: self)
@@ -632,6 +722,10 @@ final class RewardStore: ObservableObject {
     }
 
     func setICloudAutoSyncEnabled(_ isEnabled: Bool) {
+        guard ICloudBackup.isAvailable else {
+            disableICloudBackupIfUnavailable()
+            return
+        }
         state.settings.iCloudAutoSyncEnabled = isEnabled
         save()
         if isEnabled {
@@ -812,7 +906,8 @@ final class RewardStore: ObservableObject {
 
     @discardableResult
     func pullFromICloudIfNewer() -> Bool {
-        guard state.settings.iCloudAutoSyncEnabled,
+        guard ICloudBackup.isAvailable,
+              state.settings.iCloudAutoSyncEnabled,
               let data = iCloudBackupData(),
               let decoded = decodeImportData(data),
               decoded.isCloudBackup,
@@ -828,6 +923,7 @@ final class RewardStore: ObservableObject {
 
     @discardableResult
     func syncToICloud() -> Bool {
+        guard ICloudBackup.isAvailable else { return false }
         let envelope = CloudBackupEnvelope(
             schemaVersion: 3,
             savedAt: Date(),
@@ -844,13 +940,13 @@ final class RewardStore: ObservableObject {
     }
 
     func iCloudBackupPreview() -> ImportPreview? {
-        guard let data = iCloudBackupData() else { return nil }
+        guard ICloudBackup.isAvailable, let data = iCloudBackupData() else { return nil }
         return importPreview(from: data)
     }
 
     @discardableResult
     func restoreFromICloud() -> Bool {
-        guard let data = iCloudBackupData() else {
+        guard ICloudBackup.isAvailable, let data = iCloudBackupData() else {
             return false
         }
         return importStateData(data)
@@ -1009,8 +1105,14 @@ final class RewardStore: ObservableObject {
         RewardNotifications.reschedule(using: self)
     }
 
+    private func disableICloudBackupIfUnavailable() {
+        guard !ICloudBackup.isAvailable, state.settings.iCloudAutoSyncEnabled else { return }
+        state.settings.iCloudAutoSyncEnabled = false
+        save()
+    }
+
     private func registerICloudObserverIfNeeded() {
-        guard iCloudObserver == nil else { return }
+        guard ICloudBackup.isAvailable, iCloudObserver == nil else { return }
         iCloudObserver = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: NSUbiquitousKeyValueStore.default,
@@ -1044,6 +1146,7 @@ final class RewardStore: ObservableObject {
         if let debugICloudBackupData {
             return debugICloudBackupData
         }
+        guard ICloudBackup.isAvailable else { return nil }
         let cloudStore = NSUbiquitousKeyValueStore.default
         if let json = cloudStore.string(forKey: cloudBackupKey),
            let data = json.data(using: .utf8) {
@@ -1081,7 +1184,7 @@ final class RewardStore: ObservableObject {
             persistenceErrorMessage = nil
             let savedAt = Date()
             UserDefaults.standard.set(savedAt, forKey: lastLocalSaveKey)
-            if state.settings.iCloudAutoSyncEnabled {
+            if ICloudBackup.isAvailable, state.settings.iCloudAutoSyncEnabled {
                 _ = syncToICloud()
             }
             RewardNotifications.reschedule(using: self)

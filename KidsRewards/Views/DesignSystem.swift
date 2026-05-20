@@ -17,6 +17,38 @@ enum KidCoinTheme {
     static let destructive = Color(red: 0.78, green: 0.14, blue: 0.12)
 }
 
+enum KidCoinLayout {
+    /// Floating tab bar + home-indicator clearance (matches `KidCoinTabBar` layout).
+    static let tabBarReservedHeight: CGFloat = 92
+    /// Extra breathing room below the last card inside a scroll view.
+    static let scrollBottomPadding: CGFloat = 20
+}
+
+private struct KidCoinTabBarClearanceKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var kidCoinTabBarClearance: CGFloat {
+        get { self[KidCoinTabBarClearanceKey.self] }
+        set { self[KidCoinTabBarClearanceKey.self] = newValue }
+    }
+}
+
+private struct KidCoinScrollModifier: ViewModifier {
+    @Environment(\.kidCoinTabBarClearance) private var tabBarClearance
+
+    func body(content: Content) -> some View {
+        content
+            .scrollDismissesKeyboard(.interactively)
+            .contentMargins(
+                .bottom,
+                tabBarClearance + KidCoinLayout.scrollBottomPadding,
+                for: .scrollContent
+            )
+    }
+}
+
 struct KidCoinBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
@@ -141,7 +173,12 @@ extension View {
     }
 
     func kidCoinScroll() -> some View {
-        scrollDismissesKeyboard(.interactively)
+        modifier(KidCoinScrollModifier())
+    }
+
+    /// Marks content as sitting under the main tab bar so scroll views reserve bottom space.
+    func kidCoinMainTabScreen() -> some View {
+        environment(\.kidCoinTabBarClearance, KidCoinLayout.tabBarReservedHeight)
     }
 
     /// Dismisses the keyboard when tapping outside text fields (including number pads with no Done key).
