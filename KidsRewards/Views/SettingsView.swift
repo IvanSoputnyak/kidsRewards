@@ -286,7 +286,7 @@ struct SettingsView: View {
             isPresented: $isExporting,
             document: exportDocument,
             contentType: .json,
-            defaultFilename: "kidcoin-keeper-backup"
+            defaultFilename: AppBranding.exportFilename
         ) { _ in }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
             switch result {
@@ -479,7 +479,7 @@ struct SettingsView: View {
     }
 
     private func kidName(for id: UUID) -> String {
-        store.state.kids.first { $0.id == id }?.name ?? "Unknown kid"
+        store.kid(withID: id)?.name ?? "Unknown kid"
     }
 }
 

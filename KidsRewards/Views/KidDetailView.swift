@@ -12,7 +12,7 @@ struct KidDetailView: View {
     @State private var correctionErrorMessage = ""
 
     private var kid: Kid? {
-        store.state.kids.first { $0.id == kidID }
+        store.kid(withID: kidID)
     }
 
     var body: some View {
@@ -29,7 +29,7 @@ struct KidDetailView: View {
                 }
                 .kidCoinScroll()
                 .kidCoinBackground()
-                .navigationTitle("Kids")
+                .navigationTitle(kid.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .tint(KidCoinTheme.primary)
                 .navigationDestination(for: KidVaultRoute.self) { route in
@@ -217,18 +217,20 @@ struct KidDetailView: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(transactions) { transaction in
-                        TransactionRow(
+                        RewardTransactionRow(
                             transaction: transaction,
                             currencyCode: store.state.settings.currencyCode,
-                            onCorrect: {
-                                transactionBeingCorrected = transaction
-                                correctedNote = transaction.note
-                                correctedPoints = max(abs(transaction.points), 1)
-                                correctedAddsPoints = transaction.points >= 0
-                            },
-                            onDelete: {
-                                transactionPendingDeletion = transaction
-                            }
+                            variant: .parent(
+                                onCorrect: {
+                                    transactionBeingCorrected = transaction
+                                    correctedNote = transaction.note
+                                    correctedPoints = max(abs(transaction.points), 1)
+                                    correctedAddsPoints = transaction.points >= 0
+                                },
+                                onDelete: {
+                                    transactionPendingDeletion = transaction
+                                }
+                            )
                         )
                     }
                 }
@@ -243,100 +245,6 @@ struct KidDetailView: View {
         correctedAddsPoints = true
     }
 
-}
-
-private struct TransactionRow: View {
-    let transaction: RewardTransaction
-    let currencyCode: String
-    let onCorrect: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(transaction.note)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(detailText)
-                    .font(.caption2)
-                    .foregroundStyle(KidCoinTheme.mutedText)
-            }
-
-            Spacer()
-
-            Text(pointsLabel)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(pointsBackground)
-                .foregroundStyle(pointsForeground)
-                .clipShape(Capsule())
-
-            Button(action: onCorrect) {
-                Image(systemName: "pencil")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(KidCoinTheme.primary)
-                    .frame(width: 32, height: 32)
-                    .background(KidCoinTheme.primary.opacity(0.1))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Correct transaction")
-
-            Button(action: onDelete) {
-                Image(systemName: "trash")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(KidCoinTheme.destructive)
-                    .frame(width: 32, height: 32)
-                    .background(KidCoinTheme.destructive.opacity(0.1))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Delete transaction")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .tileCard(cornerRadius: 14)
-    }
-
-    private var detailText: String {
-        let formattedDate = transaction.date.formatted(date: .abbreviated, time: .omitted)
-        if let amount = transaction.currencyAmount {
-            return "\(formattedDate) · \(Formatters.currency(amount, code: currencyCode))"
-        }
-        return formattedDate
-    }
-
-    private var pointsLabel: String {
-        transaction.pointsDisplayLabel
-    }
-
-    private var pointsBackground: Color {
-        switch transaction.kind {
-        case .cashedOut:
-            return KidCoinTheme.destructive.opacity(0.12)
-        case .deposited:
-            return KidCoinTheme.mint.opacity(0.25)
-        case .withdrawn:
-            return KidCoinTheme.primary.opacity(0.2)
-        case .earned, .interest, .adjusted:
-            return KidCoinTheme.primary.opacity(0.12)
-        }
-    }
-
-    private var pointsForeground: Color {
-        switch transaction.kind {
-        case .cashedOut:
-            return KidCoinTheme.destructive
-        case .deposited:
-            return KidCoinTheme.mintText
-        case .withdrawn:
-            return KidCoinTheme.primary
-        case .earned, .interest, .adjusted:
-            return KidCoinTheme.primary
-        }
-    }
 }
 
 private struct CorrectTransactionModal: View {

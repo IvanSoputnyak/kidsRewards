@@ -719,6 +719,57 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.savingsGoalProgress(for: kid), 12)
     }
 
+    func testSavingsGoalProgressCapsAtTarget() {
+        let kid = Kid(
+            name: "Avery",
+            availablePoints: 30,
+            vaultPoints: 10,
+            savingsGoal: SavingsGoal(title: "Bike", targetPoints: 20)
+        )
+        let store = makeStore(kids: [kid])
+
+        XCTAssertEqual(store.savingsGoalProgress(for: kid), 20)
+    }
+
+    func testOneTimeChoreUnavailableAfterAward() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "One-off", points: 5, recurrence: .none)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        XCTAssertTrue(store.isTaskAvailable(task, for: kid))
+        store.award(task: task, to: kid)
+
+        XCTAssertFalse(store.isTaskAvailable(task, for: kid))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+        XCTAssertEqual(store.state.taskCompletions.count, 1)
+    }
+
+    func testScheduledAllowanceQueueDoesNotMarkScheduleAppliedUntilApproved() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
+        let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: lastWeek))
+        var settings = RewardSettings.defaults
+        settings.allowancePoints = 4
+        settings.allowanceRecurrence = .weekly
+        settings.approvalFlowEnabled = true
+        settings.lastAllowanceAppliedAt = lastWeek
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertTrue(store.applyDueAllowanceIfNeeded(now: now))
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.settings.lastAllowanceAppliedAt, lastWeek)
+
+        let request = store.state.approvalRequests[0]
+        XCTAssertTrue(store.approveRequest(request))
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 4)
+        XCTAssertNotNil(store.state.settings.lastAllowanceAppliedAt)
+        XCTAssertNotEqual(store.state.settings.lastAllowanceAppliedAt, lastWeek)
+    }
+
     func testParentPINLockoutAfterRepeatedFailures() async {
         let pinManager = InMemoryParentPINManager()
         let store = RewardStore(

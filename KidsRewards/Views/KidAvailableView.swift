@@ -18,7 +18,7 @@ struct KidAvailableView: View {
     @State private var showingCashOutConfirmation = false
 
     private var kid: Kid? {
-        store.state.kids.first { $0.id == kidID }
+        store.kid(withID: kidID)
     }
 
     var body: some View {

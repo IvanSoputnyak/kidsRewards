@@ -67,7 +67,7 @@ struct ContentView: View {
                         isChildMode = true
                     },
                     onBiometricUnlock: {
-                        ParentBiometricUnlock.unlock(reason: "Unlock KidCoin Keeper parent controls") { success in
+                        ParentBiometricUnlock.unlock(reason: AppBranding.biometricUnlockReason) { success in
                             if success {
                                 pinEntry = ""
                                 pinError = ""
@@ -218,7 +218,7 @@ private struct ChildModeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    PageHeader(eyebrow: "Child mode", title: "My Rewards")
+                    PageHeader(eyebrow: "Child mode", title: AppBranding.childAppName)
                     Spacer()
                     Button("Parent") {
                         onExit()
@@ -462,9 +462,10 @@ private struct ChildKidCard: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(transactions) { transaction in
-                        ChildTransactionRow(
+                        RewardTransactionRow(
                             transaction: transaction,
-                            currencyCode: store.state.settings.currencyCode
+                            currencyCode: store.state.settings.currencyCode,
+                            variant: .child
                         )
                     }
                 }
@@ -532,73 +533,6 @@ private struct ChildKidCard: View {
         }
         .disabled(!approvalFlowEnabled || !isAvailable || isPending)
         .buttonStyle(.plain)
-    }
-}
-
-private struct ChildTransactionRow: View {
-    let transaction: RewardTransaction
-    let currencyCode: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(transaction.note)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-                Text(detailText)
-                    .font(.caption2)
-                    .foregroundStyle(KidCoinTheme.mutedText)
-            }
-            Spacer()
-            Text(transaction.pointsDisplayLabel)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(pointsBackground)
-                .foregroundStyle(pointsForeground)
-                .clipShape(Capsule())
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(KidCoinTheme.muted.opacity(0.45))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(transaction.note), \(transaction.pointsDisplayLabel)")
-    }
-
-    private var detailText: String {
-        let formattedDate = transaction.date.formatted(date: .abbreviated, time: .omitted)
-        if let amount = transaction.currencyAmount {
-            return "\(formattedDate) · \(Formatters.currency(amount, code: currencyCode))"
-        }
-        return formattedDate
-    }
-
-    private var pointsBackground: Color {
-        switch transaction.kind {
-        case .cashedOut:
-            return KidCoinTheme.destructive.opacity(0.12)
-        case .deposited:
-            return KidCoinTheme.mint.opacity(0.25)
-        case .withdrawn:
-            return KidCoinTheme.primary.opacity(0.2)
-        case .earned, .interest, .adjusted:
-            return KidCoinTheme.primary.opacity(0.12)
-        }
-    }
-
-    private var pointsForeground: Color {
-        switch transaction.kind {
-        case .cashedOut:
-            return KidCoinTheme.destructive
-        case .deposited:
-            return KidCoinTheme.mintText
-        case .withdrawn:
-            return KidCoinTheme.primary
-        case .earned, .interest, .adjusted:
-            return KidCoinTheme.primary
-        }
     }
 }
 

@@ -120,6 +120,14 @@ final class RewardStore: ObservableObject {
         state.kids.reduce(0) { $0 + readyChoreCount(for: $1, now: now) }
     }
 
+    func firstKidWithReadyChores(now: Date = Date()) -> Kid? {
+        state.kids.first { readyChoreCount(for: $0, now: now) > 0 }
+    }
+
+    func firstKidEligibleForVaultInterest() -> Kid? {
+        state.kids.first { interestPoints(for: $0) > 0 }
+    }
+
     func pendingRequestCount(for kid: Kid) -> Int {
         state.approvalRequests.filter { $0.kidID == kid.id }.count
     }
@@ -192,7 +200,8 @@ final class RewardStore: ObservableObject {
     }
 
     func savingsGoalProgress(for kid: Kid) -> Int {
-        kid.totalPoints
+        guard let goal = kid.savingsGoal else { return kid.totalPoints }
+        return kid.savingsGoalProgress(toward: goal)
     }
 
     var isParentPINLockedOut: Bool {
@@ -283,9 +292,11 @@ final class RewardStore: ObservableObject {
 
     func isTaskAvailable(_ task: RewardTask, for kid: Kid, now: Date = Date()) -> Bool {
         guard task.isAssigned(to: kid.id) else { return false }
-        guard task.recurrence != .none,
-              let completion = taskCompletion(for: task, kid: kid) else {
+        guard let completion = taskCompletion(for: task, kid: kid) else {
             return true
+        }
+        guard task.recurrence != .none else {
+            return false
         }
         return isDue(since: completion.lastAwardedAt, recurrence: task.recurrence, now: now)
     }
@@ -599,7 +610,7 @@ final class RewardStore: ObservableObject {
             guard points > 0 else { continue }
             applyAllowancePoints(points, toKidAt: index, date: date)
         }
-        state.settings.lastAllowanceAppliedAt = date
+        recordAllowanceScheduleApplied(at: date)
         save()
     }
 
@@ -630,6 +641,7 @@ final class RewardStore: ObservableObject {
             points: amount,
             note: "Allowance request"
         )
+        save()
         return true
     }
 
@@ -671,7 +683,6 @@ final class RewardStore: ObservableObject {
                 }
             }
             guard queuedAny else { return false }
-            state.settings.lastAllowanceAppliedAt = now
             save()
             RewardNotifications.reschedule(using: self)
             return true
@@ -828,6 +839,7 @@ final class RewardStore: ObservableObject {
                 return false
             }
             applyAllowancePoints(currentRequest.points, toKidAt: index, date: Date())
+            recordAllowanceScheduleApplied()
             didApply = true
         }
         guard didApply else { return false }
@@ -958,12 +970,16 @@ final class RewardStore: ObservableObject {
     }
 
     private func updateTaskCompletion(_ task: RewardTask, for kid: Kid, at date: Date) {
-        guard task.recurrence != .none else { return }
         if let index = state.taskCompletions.firstIndex(where: { $0.taskID == task.id && $0.kidID == kid.id }) {
             state.taskCompletions[index].lastAwardedAt = date
         } else {
             state.taskCompletions.append(TaskCompletion(kidID: kid.id, taskID: task.id, lastAwardedAt: date))
         }
+    }
+
+    private func recordAllowanceScheduleApplied(at date: Date = Date()) {
+        guard state.settings.allowanceRecurrence != .none else { return }
+        state.settings.lastAllowanceAppliedAt = date
     }
 
     private func taskCompletion(for task: RewardTask, kid: Kid) -> TaskCompletion? {

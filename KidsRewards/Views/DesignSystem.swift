@@ -536,3 +536,185 @@ struct EmptyStatePanel: View {
         }
     }
 }
+
+// MARK: - Transaction rows
+
+enum TransactionPillStyle {
+    static func background(for kind: RewardTransaction.Kind) -> Color {
+        switch kind {
+        case .cashedOut:
+            return KidCoinTheme.destructive.opacity(0.12)
+        case .deposited:
+            return KidCoinTheme.mint.opacity(0.25)
+        case .withdrawn:
+            return KidCoinTheme.primary.opacity(0.2)
+        case .earned, .interest, .adjusted:
+            return KidCoinTheme.primary.opacity(0.12)
+        }
+    }
+
+    static func foreground(for kind: RewardTransaction.Kind) -> Color {
+        switch kind {
+        case .cashedOut:
+            return KidCoinTheme.destructive
+        case .deposited:
+            return KidCoinTheme.mintText
+        case .withdrawn:
+            return KidCoinTheme.primary
+        case .earned, .interest, .adjusted:
+            return KidCoinTheme.primary
+        }
+    }
+}
+
+enum RewardTransactionRowVariant {
+    case household(kidName: String)
+    case parent(onCorrect: () -> Void, onDelete: () -> Void)
+    case child
+}
+
+struct RewardTransactionRow: View {
+    let transaction: RewardTransaction
+    let currencyCode: String
+    let variant: RewardTransactionRowVariant
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(transaction.note)
+                    .font(titleFont)
+                    .foregroundStyle(titleColor)
+                    .lineLimit(variantLineLimit)
+                Text(subtitleText)
+                    .font(.caption2)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            Text(transaction.pointsDisplayLabel)
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(TransactionPillStyle.background(for: transaction.kind))
+                .foregroundStyle(TransactionPillStyle.foreground(for: transaction.kind))
+                .clipShape(Capsule())
+
+            if case .parent(let onCorrect, let onDelete) = variant {
+                Button(action: onCorrect) {
+                    Image(systemName: "pencil")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.primary)
+                        .frame(width: 32, height: 32)
+                        .background(KidCoinTheme.primary.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Correct transaction")
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.destructive)
+                        .frame(width: 32, height: 32)
+                        .background(KidCoinTheme.destructive.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete transaction")
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, verticalPadding)
+        .modifier(TransactionRowChrome(variant: variant))
+        .accessibilityElement(children: accessibilityCombinesChildren ? .combine : .ignore)
+        .accessibilityLabel(accessibilityLabelText)
+    }
+
+    private var titleFont: Font {
+        switch variant {
+        case .child:
+            return .caption.weight(.semibold)
+        case .household, .parent:
+            return .subheadline.weight(.semibold)
+        }
+    }
+
+    private var titleColor: Color {
+        KidCoinTheme.foreground
+    }
+
+    private var variantLineLimit: Int? {
+        switch variant {
+        case .child:
+            return 2
+        case .household, .parent:
+            return 1
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch variant {
+        case .child:
+            return 12
+        case .household, .parent:
+            return 14
+        }
+    }
+
+    private var verticalPadding: CGFloat {
+        switch variant {
+        case .child:
+            return 10
+        case .household, .parent:
+            return 11
+        }
+    }
+
+    private var accessibilityCombinesChildren: Bool {
+        if case .child = variant { return true }
+        return false
+    }
+
+    private var accessibilityLabelText: String {
+        switch variant {
+        case .child:
+            return "\(transaction.note), \(transaction.pointsDisplayLabel)"
+        case .household, .parent:
+            return ""
+        }
+    }
+
+    private var subtitleText: String {
+        let formattedDate = transaction.date.formatted(date: .abbreviated, time: .omitted)
+        let dateAndAmount: String
+        if let amount = transaction.currencyAmount {
+            dateAndAmount = "\(formattedDate) · \(Formatters.currency(amount, code: currencyCode))"
+        } else {
+            dateAndAmount = formattedDate
+        }
+        switch variant {
+        case .household(let kidName):
+            return "\(kidName) · \(dateAndAmount)"
+        case .parent, .child:
+            return dateAndAmount
+        }
+    }
+}
+
+private struct TransactionRowChrome: ViewModifier {
+    let variant: RewardTransactionRowVariant
+
+    func body(content: Content) -> some View {
+        switch variant {
+        case .child:
+            content
+                .background(KidCoinTheme.muted.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        case .household, .parent:
+            content.tileCard(cornerRadius: 14)
+        }
+    }
+}

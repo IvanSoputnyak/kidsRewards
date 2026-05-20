@@ -42,10 +42,8 @@ The app is **ready for private family use** via Xcode and a personal Apple ID: f
 | Allowance amount & schedule | Per-kid **Available** + home quick action | **Settings** with other economy rules |
 | Approval queue | Deep in **Settings** | Near approval toggle; badge on Settings tab |
 | Award chore | **Kid detail** only | Work tab doesn’t award; home “chores ready” doesn’t navigate |
-| Interest / chores attention rows | Home cards, **no tap action** | Navigate to vault/kid or look non-tappable |
 | Allowance config vs “Apply now” | Mixed on **Available** | Separate config from action |
 | Transaction fix | Kid history only | Not from home recent activity |
-| Kid nav title | Back title **“Kids”** | Kid’s name |
 | Vault withdraw | **Vault** screen | Easy to miss if only using Available |
 
 ### Navigation depth (acceptable, not missing)
@@ -61,11 +59,9 @@ The app is **ready for private family use** via Xcode and a personal Apple ID: f
 
 ## 4. Open polish (optional before v1.0)
 
-- Wire or de-emphasize home **interest due** / **chores ready** rows.
-- Kid name in navigation title on kid detail.
 - Settings tab badge for pending approvals (optional).
-- Consistent app name in strings (“Kids Rewards” vs “KidCoin Keeper”).
-- Expanded UI tests (optional).
+- Move allowance defaults into Settings for clearer IA (optional).
+- Expanded UI tests beyond smoke flows (optional).
 
 ---
 

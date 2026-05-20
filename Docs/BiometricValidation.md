@@ -5,7 +5,7 @@ Use this checklist on a physical iPhone or iPad because Simulator cannot prove F
 ## Setup
 
 - Install a debug build on a device with Face ID or Touch ID enrolled.
-- Open Settings in KidCoin Keeper and set a parent PIN.
+- Open Settings in Kids Rewards and set a parent PIN.
 - Force quit and reopen the app.
 
 ## Expected Behavior

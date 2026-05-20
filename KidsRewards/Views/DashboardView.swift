@@ -9,12 +9,13 @@ struct DashboardView: View {
     @State private var kidBeingEdited: Kid?
     @State private var editedKidName = ""
     @State private var allowanceAppliedMessage = ""
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    PageHeader(eyebrow: "Household", title: "Kids Rewards") {
+                    PageHeader(eyebrow: "Household", title: AppBranding.parentAppName) {
                         RoundIconButton(systemImage: "plus") {
                             showingAddKid = true
                         }
@@ -52,6 +53,9 @@ struct DashboardView: View {
             .animation(.easeOut(duration: 0.18), value: kidBeingEdited)
             .navigationDestination(for: Kid.self) { kid in
                 KidDetailView(kidID: kid.id)
+            }
+            .navigationDestination(for: KidVaultRoute.self) { route in
+                KidVaultView(kidID: route.kidID)
             }
             .confirmationDialog(
                 deletionTitle,
@@ -267,10 +271,10 @@ struct DashboardView: View {
                     ForEach(recent) { transaction in
                         if let kid = store.kid(withID: transaction.kidID) {
                             NavigationLink(value: kid) {
-                                HouseholdActivityRow(
+                                RewardTransactionRow(
                                     transaction: transaction,
-                                    kidName: kid.name,
-                                    currencyCode: store.state.settings.currencyCode
+                                    currencyCode: store.state.settings.currencyCode,
+                                    variant: .household(kidName: kid.name)
                                 )
                             }
                             .buttonStyle(.plain)
@@ -319,10 +323,10 @@ struct DashboardView: View {
                 DashboardAttentionItem(
                     id: "interest",
                     title: "Vault interest is due",
-                    subtitle: "Open a kid's vault to apply or request interest",
+                    subtitle: "Open vault to apply or request interest",
                     systemImage: "percent",
                     accent: .mint,
-                    action: { }
+                    action: openVaultForScheduledInterest
                 )
             )
         }
@@ -336,7 +340,7 @@ struct DashboardView: View {
                     subtitle: "Open a kid to award work",
                     systemImage: "checkmark.circle.fill",
                     accent: .primary,
-                    action: { }
+                    action: openKidWithReadyChores
                 )
             )
         }
@@ -367,6 +371,16 @@ struct DashboardView: View {
             store.applyAllowanceToAllKids()
             allowanceAppliedMessage = "Allowance was applied to all kids."
         }
+    }
+
+    private func openKidWithReadyChores() {
+        guard let kid = store.firstKidWithReadyChores() else { return }
+        navigationPath.append(kid)
+    }
+
+    private func openVaultForScheduledInterest() {
+        guard let kid = store.firstKidEligibleForVaultInterest() else { return }
+        navigationPath.append(KidVaultRoute(kidID: kid.id))
     }
 }
 
@@ -544,68 +558,7 @@ private struct DashboardKidCard: View {
     }
 }
 
-private struct HouseholdActivityRow: View {
-    let transaction: RewardTransaction
-    let kidName: String
-    let currencyCode: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(transaction.note)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(KidCoinTheme.foreground)
-                    .lineLimit(1)
-                Text("\(kidName) · \(detailText)")
-                    .font(.caption2)
-                    .foregroundStyle(KidCoinTheme.mutedText)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-
-            Text(transaction.pointsDisplayLabel)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(pointsBackground)
-                .foregroundStyle(pointsForeground)
-                .clipShape(Capsule())
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .tileCard(cornerRadius: 14)
-    }
-
-    private var detailText: String {
-        let formattedDate = transaction.date.formatted(date: .abbreviated, time: .omitted)
-        if let amount = transaction.currencyAmount {
-            return "\(formattedDate) · \(Formatters.currency(amount, code: currencyCode))"
-        }
-        return formattedDate
-    }
-
-    private var pointsBackground: Color {
-        switch transaction.kind {
-        case .cashedOut: KidCoinTheme.destructive.opacity(0.12)
-        case .deposited: KidCoinTheme.mint.opacity(0.25)
-        case .withdrawn: KidCoinTheme.primary.opacity(0.2)
-        case .earned, .interest, .adjusted: KidCoinTheme.primary.opacity(0.12)
-        }
-    }
-
-    private var pointsForeground: Color {
-        switch transaction.kind {
-        case .cashedOut: KidCoinTheme.destructive
-        case .deposited: KidCoinTheme.mintText
-        case .withdrawn: KidCoinTheme.primary
-        case .earned, .interest, .adjusted: KidCoinTheme.primary
-        }
-    }
-}
-
-// MARK: - Kid modals (unchanged)
+// MARK: - Kid modals
 
 private struct EditKidModal: View {
     @Binding var name: String
