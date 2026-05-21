@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var interestRateText = ""
     @State private var parentPINText = ""
     @State private var approvalFlowEnabled = false
+    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
+    @State private var allowanceWeekday: Int = 1
+    @State private var allowanceMonthDay: Int = 1
     @State private var interestRecurrence: RewardTask.Recurrence = .none
     @State private var notificationsEnabled = true
     @State private var iCloudAutoSyncEnabled = false
@@ -50,6 +53,51 @@ struct SettingsView: View {
                     }
                 }
 
+                SectionCard(title: "Allowance") {
+                    SettingsField(label: "Schedule", hint: "Runs automatically when the app opens on the due day") {
+                        Picker("", selection: $allowanceRecurrence) {
+                            ForEach(RewardTask.Recurrence.allCases, id: \.self) {
+                                Text($0.label).tag($0)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(KidCoinTheme.primary)
+                        .onChange(of: allowanceRecurrence) { _, newValue in
+                            store.setAllowanceRecurrence(newValue)
+                        }
+                    }
+
+                    if allowanceRecurrence == .weekly || allowanceRecurrence == .biweekly {
+                        SettingsField(label: "Day of week", hint: "Allowance fires on or after this day each cycle") {
+                            Picker("", selection: $allowanceWeekday) {
+                                ForEach(1...7, id: \.self) { day in
+                                    Text(weekdayName(day)).tag(day)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(KidCoinTheme.primary)
+                            .onChange(of: allowanceWeekday) { _, newValue in
+                                store.setAllowanceWeekday(newValue)
+                            }
+                        }
+                    }
+
+                    if allowanceRecurrence == .monthly {
+                        SettingsField(label: "Day of month", hint: "Allowance fires on or after this day each month") {
+                            CounterControl(value: $allowanceMonthDay, range: 1...28)
+                                .onChange(of: allowanceMonthDay) { _, newValue in
+                                    store.setAllowanceMonthDay(newValue)
+                                }
+                        }
+                    }
+
+                    Text(allowanceScheduleText)
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                        .lineSpacing(2)
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: allowanceRecurrence)
+
                 SectionCard(title: "Vault") {
                     SettingsField(label: "Interest rate", hint: "Decimal, 0.05 means 5%") {
                         TextField("0.05", text: $interestRateText)
@@ -73,12 +121,11 @@ struct SettingsView: View {
                             .clipShape(Capsule())
                     }
 
-                    Picker("Automatic interest", selection: $interestRecurrence) {
-                        ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
-                            Text(option.label).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    SegmentedPickerRow(
+                        selection: $interestRecurrence,
+                        items: RewardTask.Recurrence.allCases,
+                        label: \.label
+                    )
                     .onChange(of: interestRecurrence) { _, newValue in
                         store.setInterestRecurrence(newValue)
                     }
@@ -176,14 +223,20 @@ struct SettingsView: View {
                                     currencyCode: store.state.settings.currencyCode,
                                     currencyValue: store.currencyValue(for: request.points),
                                     onApprove: {
-                                        _ = store.approveRequest(request)
+                                        withAnimation(KidCoinMotion.list) {
+                                            _ = store.approveRequest(request)
+                                        }
                                     },
                                     onDecline: {
-                                        store.declineRequest(request)
+                                        withAnimation(KidCoinMotion.list) {
+                                            store.declineRequest(request)
+                                        }
                                     }
                                 )
+                                .transition(.kidCoinRow)
                             }
                         }
+                        .animation(KidCoinMotion.list, value: store.state.approvalRequests)
                     }
                 }
                 .id("approvalQueue")
@@ -209,7 +262,7 @@ struct SettingsView: View {
                         .background(KidCoinTheme.muted)
                         .clipShape(Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
 
                     Text(dataBackupFootnote)
                         .font(.caption)
@@ -244,7 +297,7 @@ struct SettingsView: View {
                             .background(KidCoinTheme.mint.opacity(0.24))
                             .clipShape(Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
                     }
 
                     if !importMessage.isEmpty {
@@ -276,7 +329,7 @@ struct SettingsView: View {
             .onAppear(perform: loadSettings)
             .onChange(of: router.focusApprovalsSection) { _, shouldFocus in
                 guard shouldFocus else { return }
-                withAnimation(.easeOut(duration: 0.25)) {
+                withAnimation(KidCoinMotion.scroll) {
                     scrollProxy.scrollTo("approvalQueue", anchor: .top)
                 }
                 router.focusApprovalsSection = false
@@ -357,12 +410,59 @@ struct SettingsView: View {
         switch interestRecurrence {
         case .none:
             return "Interest is applied manually from each kid's vault screen."
-        case .daily, .weekly:
+        case .daily, .weekly, .biweekly, .monthly:
             let cadence = interestRecurrence.label.lowercased()
             if let lastApplied = store.state.settings.lastInterestAppliedAt {
                 return "Interest runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
             }
             return "Interest runs \(cadence) the next time the app opens."
+        }
+    }
+
+    private var allowanceScheduleText: String {
+        switch allowanceRecurrence {
+        case .none:
+            return "Allowance is applied manually from each kid's detail screen."
+        case .daily:
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs daily. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs daily when the app opens."
+        case .weekly:
+            let day = weekdayName(allowanceWeekday)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs every \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs every \(day) when the app opens."
+        case .biweekly:
+            let day = weekdayName(allowanceWeekday)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs every other \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs every other \(day) when the app opens."
+        case .monthly:
+            let suffix = ordinalSuffix(for: allowanceMonthDay)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs on the \(allowanceMonthDay)\(suffix) of each month. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs on the \(allowanceMonthDay)\(suffix) of each month when the app opens."
+        }
+    }
+
+    private func weekdayName(_ weekday: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        guard weekday >= 1, weekday <= 7 else { return "" }
+        return formatter.weekdaySymbols[weekday - 1]
+    }
+
+    private func ordinalSuffix(for day: Int) -> String {
+        switch day {
+        case 11, 12, 13: return "th"
+        case _ where day % 10 == 1: return "st"
+        case _ where day % 10 == 2: return "nd"
+        case _ where day % 10 == 3: return "rd"
+        default: return "th"
         }
     }
 
@@ -409,6 +509,9 @@ struct SettingsView: View {
         interestRateText = Formatters.decimalInput(store.state.settings.vaultInterestRate)
         parentPINText = ""
         approvalFlowEnabled = store.state.settings.approvalFlowEnabled
+        allowanceRecurrence = store.state.settings.allowanceRecurrence
+        allowanceWeekday = store.state.settings.allowanceWeekday ?? 1
+        allowanceMonthDay = store.state.settings.allowanceMonthDay ?? 1
         interestRecurrence = store.state.settings.interestRecurrence
         notificationsEnabled = store.state.settings.notificationsEnabled
         iCloudAutoSyncEnabled = store.state.settings.iCloudAutoSyncEnabled
@@ -546,7 +649,7 @@ private struct ApprovalRequestRow: View {
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
         }
         .padding(14)
         .background(KidCoinTheme.muted.opacity(0.55))
@@ -614,4 +717,3 @@ private struct SectionCard<Content: View>: View {
         .tileCard(cornerRadius: 26)
     }
 }
-

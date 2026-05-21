@@ -14,7 +14,6 @@ struct KidAvailableView: View {
     @State private var adjustmentNote = ""
     @State private var allowancePointsText = ""
     @State private var kidAllowancePointsText = ""
-    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
     @State private var showingCashOutConfirmation = false
 
     private var kid: Kid? {
@@ -109,7 +108,9 @@ struct KidAvailableView: View {
                     disabled: parsedAllowancePoints == 0
                 ) {
                     saveAllowanceSettings()
-                    store.applyAllowance(to: kid)
+                    withAnimation(KidCoinMotion.list) {
+                        store.applyAllowance(to: kid)
+                    }
                 }
 
                 PillButton(
@@ -119,23 +120,16 @@ struct KidAvailableView: View {
                     disabled: store.state.kids.isEmpty || parsedAllowancePoints == 0
                 ) {
                     saveAllowanceSettings()
-                    store.applyAllowanceToAllKids()
-                }
-
-                Picker("Automatic allowance", selection: $allowanceRecurrence) {
-                    ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
-                        Text(option.label).tag(option)
+                    withAnimation(KidCoinMotion.list) {
+                        store.applyAllowanceToAllKids()
                     }
                 }
-                .pickerStyle(.segmented)
-                .accessibilityLabel("Automatic allowance recurrence")
-                .onChange(of: allowanceRecurrence) { _, _ in
-                    saveAllowanceSettings()
-                }
 
-                Text(allowanceStatusText)
-                    .font(.caption)
-                    .foregroundStyle(KidCoinTheme.mutedText)
+                if store.state.settings.allowanceRecurrence != .none {
+                    Text(allowanceScheduleCaption)
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                }
 
                 PillButton(
                     title: "Save Allowance Settings",
@@ -154,11 +148,11 @@ struct KidAvailableView: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel(title: "Manual Adjustment")
             VStack(spacing: 14) {
-                Picker("Adjustment type", selection: $adjustmentAddsPoints) {
-                    Text("Add").tag(true)
-                    Text("Remove").tag(false)
-                }
-                .pickerStyle(.segmented)
+                SegmentedPickerRow(
+                    selection: $adjustmentAddsPoints,
+                    items: [true, false],
+                    label: { $0 ? "Add" : "Remove" }
+                )
 
                 TextField("Reason, for example correction", text: $adjustmentNote)
                     .kidCoinNameEntry()
@@ -183,7 +177,9 @@ struct KidAvailableView: View {
                     disabled: !adjustmentAddsPoints && kid.availablePoints == 0
                 ) {
                     let signedPoints = adjustmentAddsPoints ? adjustmentPoints : -adjustmentPoints
-                    store.adjust(points: signedPoints, note: adjustmentNote, for: kid)
+                    withAnimation(KidCoinMotion.list) {
+                        store.adjust(points: signedPoints, note: adjustmentNote, for: kid)
+                    }
                     adjustmentPoints = 1
                     adjustmentNote = ""
                     adjustmentAddsPoints = true
@@ -226,17 +222,13 @@ struct KidAvailableView: View {
         Int(allowancePointsText) ?? store.state.settings.allowancePoints
     }
 
-    private var allowanceStatusText: String {
-        switch allowanceRecurrence {
-        case .none:
-            return "Allowance is manual only."
-        case .daily, .weekly:
-            let cadence = allowanceRecurrence.label.lowercased()
-            if let lastApplied = store.state.settings.lastAllowanceAppliedAt {
-                return "Allowance runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Allowance runs \(cadence) the next time the app opens."
+    private var allowanceScheduleCaption: String {
+        let recurrence = store.state.settings.allowanceRecurrence
+        let cadence = recurrence.label.lowercased()
+        if let last = store.state.settings.lastAllowanceAppliedAt {
+            return "Auto-allowance: \(cadence). Last applied \(last.formatted(date: .abbreviated, time: .omitted)). Schedule in Settings."
         }
+        return "Auto-allowance: \(cadence). Adjust schedule in Settings."
     }
 
     private var cashOutButtonTitle: String {
@@ -262,17 +254,18 @@ struct KidAvailableView: View {
     }
 
     private func performCashOut(for kid: Kid) {
-        if store.state.settings.approvalFlowEnabled {
-            store.requestCashOut(points: cashOutPoints, for: kid)
-        } else {
-            store.cashOut(points: cashOutPoints, for: kid)
+        withAnimation(KidCoinMotion.list) {
+            if store.state.settings.approvalFlowEnabled {
+                store.requestCashOut(points: cashOutPoints, for: kid)
+            } else {
+                store.cashOut(points: cashOutPoints, for: kid)
+            }
         }
         cashOutPoints = 1
     }
 
     private func loadAllowanceSettings() {
         allowancePointsText = "\(store.state.settings.allowancePoints)"
-        allowanceRecurrence = store.state.settings.allowanceRecurrence
         guard let kid else { return }
         if let kidAllowance = kid.allowancePoints {
             kidAllowancePointsText = "\(kidAllowance)"
@@ -286,8 +279,7 @@ struct KidAvailableView: View {
             currencyCode: store.state.settings.currencyCode,
             currencyPerPoint: store.state.settings.currencyPerPoint,
             vaultInterestRate: store.state.settings.vaultInterestRate,
-            allowancePoints: parsedAllowancePoints,
-            allowanceRecurrence: allowanceRecurrence
+            allowancePoints: parsedAllowancePoints
         )
         if let kid {
             let trimmed = kidAllowancePointsText.trimmingCharacters(in: .whitespacesAndNewlines)

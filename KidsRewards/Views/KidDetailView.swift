@@ -32,12 +32,6 @@ struct KidDetailView: View {
                 .navigationTitle(kid.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .tint(KidCoinTheme.primary)
-                .navigationDestination(for: KidVaultRoute.self) { route in
-                    KidVaultView(kidID: route.kidID)
-                }
-                .navigationDestination(for: KidAvailableRoute.self) { route in
-                    KidAvailableView(kidID: route.kidID)
-                }
                 .overlay {
                     if let transactionBeingCorrected {
                         CorrectTransactionModal(
@@ -52,21 +46,24 @@ struct KidDetailView: View {
                                 let points = transactionBeingCorrected.kind == .adjusted
                                     ? (correctedAddsPoints ? correctedPoints : -correctedPoints)
                                     : correctedPoints
-                                let didCorrect = store.correctTransaction(
-                                    transactionBeingCorrected,
-                                    points: points,
-                                    note: correctedNote
-                                )
+                                var didCorrect = false
+                                withAnimation(KidCoinMotion.list) {
+                                    didCorrect = store.correctTransaction(
+                                        transactionBeingCorrected,
+                                        points: points,
+                                        note: correctedNote
+                                    )
+                                }
                                 clearCorrectionState()
                                 if !didCorrect {
                                     correctionErrorMessage = "That correction would make available or vault points negative."
                                 }
                             }
                         )
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                        .transition(.kidCoinModal)
                     }
                 }
-                .animation(.easeOut(duration: 0.18), value: transactionBeingCorrected)
+                .animation(KidCoinMotion.modal, value: transactionBeingCorrected)
                 .confirmationDialog(
                     "Delete Transaction?",
                     isPresented: Binding(
@@ -77,7 +74,10 @@ struct KidDetailView: View {
                 ) {
                     Button("Delete Transaction", role: .destructive) {
                         if let transactionPendingDeletion {
-                            let didDelete = store.deleteTransaction(transactionPendingDeletion)
+                            var didDelete = false
+                            withAnimation(KidCoinMotion.list) {
+                                didDelete = store.deleteTransaction(transactionPendingDeletion)
+                            }
                             if !didDelete {
                                 correctionErrorMessage = "That transaction cannot be deleted because it would make available or vault points negative."
                             }
@@ -123,7 +123,7 @@ struct KidDetailView: View {
                         showsDisclosure: true
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                 .accessibilityLabel("Available, \(kid.availablePoints) points")
                 .accessibilityHint("Opens cash out, adjustments, and allowance")
 
@@ -136,7 +136,7 @@ struct KidDetailView: View {
                         showsDisclosure: true
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                 .accessibilityLabel("Vault, \(kid.vaultPoints) points")
                 .accessibilityHint("Opens vault and savings goal")
             }
@@ -169,7 +169,9 @@ struct KidDetailView: View {
                     ForEach(store.tasks(for: kid)) { task in
                         let isAvailable = store.isTaskAvailable(task, for: kid)
                         Button {
-                            store.award(task: task, to: kid)
+                            withAnimation(KidCoinMotion.list) {
+                                store.award(task: task, to: kid)
+                            }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -195,11 +197,13 @@ struct KidDetailView: View {
                             .tileCard(cornerRadius: 18)
                         }
                         .disabled(!isAvailable)
-                        .buttonStyle(.plain)
+                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         .accessibilityLabel("\(task.title), \(task.points) points")
                         .accessibilityHint(isAvailable ? "Awards points" : "This recurring chore is not due yet")
+                        .transition(.kidCoinRow)
                     }
                 }
+                .animation(KidCoinMotion.list, value: store.tasks(for: kid))
             }
         }
     }
@@ -232,8 +236,10 @@ struct KidDetailView: View {
                                 }
                             )
                         )
+                        .transition(.kidCoinRow)
                     }
                 }
+                .animation(KidCoinMotion.list, value: transactions)
             }
         }
     }
@@ -269,11 +275,11 @@ private struct CorrectTransactionModal: View {
                     .foregroundStyle(KidCoinTheme.mutedText)
 
                 if transaction.kind == .adjusted {
-                    Picker("Adjustment type", selection: $addsPoints) {
-                        Text("Add").tag(true)
-                        Text("Remove").tag(false)
-                    }
-                    .pickerStyle(.segmented)
+                    SegmentedPickerRow(
+                        selection: $addsPoints,
+                        items: [true, false],
+                        label: { $0 ? "Add" : "Remove" }
+                    )
                 }
 
                 TextField("Note", text: $note)
@@ -308,7 +314,7 @@ private struct CorrectTransactionModal: View {
                         .foregroundStyle(.white)
                         .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
             }
             .padding(22)
             .frame(maxWidth: 380)

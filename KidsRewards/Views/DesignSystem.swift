@@ -24,6 +24,32 @@ enum KidCoinLayout {
     static let scrollBottomPadding: CGFloat = 20
 }
 
+enum KidCoinMotion {
+    static let quick = Animation.easeOut(duration: 0.18)
+    static let gentle = Animation.spring(response: 0.34, dampingFraction: 0.86, blendDuration: 0.08)
+    static let modal = Animation.spring(response: 0.36, dampingFraction: 0.84, blendDuration: 0.08)
+    static let list = Animation.spring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)
+    static let press = Animation.spring(response: 0.22, dampingFraction: 0.74, blendDuration: 0.04)
+    static let tab = Animation.spring(response: 0.34, dampingFraction: 0.82, blendDuration: 0.08)
+    static let scroll = Animation.easeInOut(duration: 0.28)
+}
+
+extension AnyTransition {
+    static var kidCoinModal: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.96)),
+            removal: .opacity.combined(with: .scale(scale: 0.98))
+        )
+    }
+
+    static var kidCoinRow: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .top)),
+            removal: .opacity.combined(with: .scale(scale: 0.98))
+        )
+    }
+}
+
 private struct KidCoinTabBarClearanceKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
@@ -226,6 +252,19 @@ extension View {
     }
 }
 
+struct KidCoinPressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var scale: CGFloat = 0.97
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? scale : 1))
+            .opacity(configuration.isPressed ? 0.86 : 1)
+            .animation(reduceMotion ? KidCoinMotion.quick : KidCoinMotion.press, value: configuration.isPressed)
+    }
+}
+
 struct PageHeader<Trailing: View>: View {
     let eyebrow: String
     let title: String
@@ -319,6 +358,8 @@ struct MetricTile: View {
             Text("\(value)")
                 .font(.system(size: 38, weight: .bold, design: .rounded))
                 .monospacedDigit()
+                .contentTransition(.numericText(value: Double(value)))
+                .animation(KidCoinMotion.gentle, value: value)
             Text("points")
                 .font(.caption2)
                 .foregroundStyle(KidCoinTheme.mutedText)
@@ -363,7 +404,7 @@ struct RoundIconButton: View {
                 .clipShape(Circle())
                 .shadow(color: KidCoinTheme.primary.opacity(0.35), radius: 12, x: 0, y: 6)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
     }
 }
 
@@ -398,7 +439,7 @@ struct PillButton: View {
             .shadow(color: shadowColor, radius: disabled ? 0 : 12, x: 0, y: disabled ? 0 : 6)
             .opacity(disabled ? 0.42 : 1)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KidCoinPressButtonStyle())
         .disabled(disabled)
     }
 
@@ -432,6 +473,49 @@ struct PillButton: View {
     }
 }
 
+/// A fully animated segmented control that replaces `.pickerStyle(.segmented)`.
+/// The active selection slides via `matchedGeometryEffect`; tapping triggers a spring transition.
+struct SegmentedPickerRow<Item: Hashable>: View {
+    @Binding var selection: Item
+    let items: [Item]
+    let label: (Item) -> String
+    @Namespace private var pill
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(items, id: \.self) { item in
+                let isSelected = item == selection
+                Button {
+                    withAnimation(KidCoinMotion.tab) {
+                        selection = item
+                    }
+                } label: {
+                    Text(label(item))
+                        .font(.caption.weight(isSelected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(KidCoinTheme.primary)
+                                    .matchedGeometryEffect(id: "pill", in: pill)
+                            }
+                        }
+                        .foregroundStyle(isSelected ? Color.white : KidCoinTheme.mutedText)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.98))
+            }
+        }
+        .padding(4)
+        .background(KidCoinTheme.muted)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
 struct CounterControl: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
@@ -439,7 +523,9 @@ struct CounterControl: View {
     var body: some View {
         HStack(spacing: 0) {
             Button {
-                value = max(range.lowerBound, value - 1)
+                withAnimation(KidCoinMotion.gentle) {
+                    value = max(range.lowerBound, value - 1)
+                }
             } label: {
                 Image(systemName: "minus")
                     .frame(width: 36, height: 36)
@@ -450,16 +536,19 @@ struct CounterControl: View {
                 .font(.headline.weight(.bold))
                 .monospacedDigit()
                 .frame(minWidth: 42)
+                .contentTransition(.numericText(value: Double(value)))
 
             Button {
-                value = min(range.upperBound, value + 1)
+                withAnimation(KidCoinMotion.gentle) {
+                    value = min(range.upperBound, value + 1)
+                }
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 36, height: 36)
             }
             .disabled(value >= range.upperBound)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
         .foregroundStyle(KidCoinTheme.foreground.opacity(0.75))
         .background(KidCoinTheme.muted)
         .clipShape(Capsule())
@@ -526,6 +615,7 @@ struct EmptyStatePanel: View {
                     .background(KidCoinTheme.primary)
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
+                    .buttonStyle(KidCoinPressButtonStyle())
             }
         }
         .frame(maxWidth: .infinity)
@@ -596,6 +686,7 @@ struct RewardTransactionRow: View {
             Text(transaction.pointsDisplayLabel)
                 .font(.caption.weight(.bold))
                 .monospacedDigit()
+                .contentTransition(.numericText())
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(TransactionPillStyle.background(for: transaction.kind))
@@ -611,7 +702,7 @@ struct RewardTransactionRow: View {
                         .background(KidCoinTheme.primary.opacity(0.1))
                         .clipShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                 .accessibilityLabel("Correct transaction")
 
                 Button(action: onDelete) {
@@ -622,7 +713,7 @@ struct RewardTransactionRow: View {
                         .background(KidCoinTheme.destructive.opacity(0.1))
                         .clipShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                 .accessibilityLabel("Delete transaction")
             }
         }

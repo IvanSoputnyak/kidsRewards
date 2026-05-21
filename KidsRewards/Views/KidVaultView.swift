@@ -60,7 +60,9 @@ struct KidVaultView: View {
                     titleVisibility: .visible
                 ) {
                     Button("Withdraw \(withdrawPoints) \(withdrawPoints == 1 ? "Point" : "Points")") {
-                        store.withdraw(points: withdrawPoints, for: kid)
+                        withAnimation(KidCoinMotion.list) {
+                            store.withdraw(points: withdrawPoints, for: kid)
+                        }
                         withdrawPoints = 1
                     }
                     Button("Cancel", role: .cancel) { }
@@ -106,9 +108,11 @@ struct KidVaultView: View {
                         }
                         Spacer()
                         Button {
-                            store.clearSavingsGoal(for: kid)
-                            goalTitle = ""
-                            goalTargetPoints = 25
+                            withAnimation(KidCoinMotion.list) {
+                                store.clearSavingsGoal(for: kid)
+                                goalTitle = ""
+                                goalTargetPoints = 25
+                            }
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.caption.weight(.bold))
@@ -117,7 +121,7 @@ struct KidVaultView: View {
                                 .background(KidCoinTheme.destructive.opacity(0.1))
                                 .clipShape(Circle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                         .accessibilityLabel("Clear savings goal")
                     }
 
@@ -126,6 +130,7 @@ struct KidVaultView: View {
                         total: Double(goal.targetPoints)
                     )
                         .tint(KidCoinTheme.mintText)
+                        .animation(KidCoinMotion.gentle, value: store.savingsGoalProgress(for: kid))
                         .accessibilityLabel("Savings goal progress")
                         .accessibilityValue("\(store.savingsGoalProgress(for: kid)) of \(goal.targetPoints) points")
                 }
@@ -152,7 +157,9 @@ struct KidVaultView: View {
                     tone: .mint,
                     disabled: goalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ) {
-                    store.updateSavingsGoal(for: kid, title: goalTitle, targetPoints: goalTargetPoints)
+                    withAnimation(KidCoinMotion.list) {
+                        store.updateSavingsGoal(for: kid, title: goalTitle, targetPoints: goalTargetPoints)
+                    }
                     goalTitle = ""
                     goalTargetPoints = 25
                 }
@@ -178,7 +185,9 @@ struct KidVaultView: View {
                     tone: .mint,
                     disabled: kid.availablePoints == 0 || vaultDepositPending
                 ) {
-                    store.deposit(points: depositPoints, for: kid)
+                    withAnimation(KidCoinMotion.list) {
+                        _ = store.deposit(points: depositPoints, for: kid)
+                    }
                     depositPoints = 1
                 }
                 HStack {
@@ -240,10 +249,12 @@ struct KidVaultView: View {
     }
 
     private func applyInterest(for kid: Kid) {
-        if store.state.settings.approvalFlowEnabled {
-            store.requestInterest(for: kid)
-        } else {
-            store.applyInterest(to: kid)
+        withAnimation(KidCoinMotion.list) {
+            if store.state.settings.approvalFlowEnabled {
+                store.requestInterest(for: kid)
+            } else {
+                store.applyInterest(to: kid)
+            }
         }
     }
 

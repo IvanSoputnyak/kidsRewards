@@ -92,11 +92,13 @@ final class RewardStore: ObservableObject {
               state.kids.contains(where: { allowancePoints(for: $0) > 0 }) else {
             return false
         }
-        if let lastApplied = state.settings.lastAllowanceAppliedAt,
-           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
-            return false
-        }
-        return true
+        return RecurrenceSchedule.allowanceIsDue(
+            since: state.settings.lastAllowanceAppliedAt,
+            recurrence: recurrence,
+            weekday: state.settings.allowanceWeekday,
+            monthDay: state.settings.allowanceMonthDay,
+            now: now
+        )
     }
 
     func isInterestScheduleDue(now: Date = Date()) -> Bool {
@@ -581,6 +583,8 @@ final class RewardStore: ObservableObject {
             allowancePoints: max(allowancePoints ?? state.settings.allowancePoints, 0),
             allowanceRecurrence: allowanceRecurrence ?? state.settings.allowanceRecurrence,
             lastAllowanceAppliedAt: state.settings.lastAllowanceAppliedAt,
+            allowanceWeekday: state.settings.allowanceWeekday,
+            allowanceMonthDay: state.settings.allowanceMonthDay,
             interestRecurrence: interestRecurrence ?? state.settings.interestRecurrence,
             lastInterestAppliedAt: state.settings.lastInterestAppliedAt,
             notificationsEnabled: notificationsEnabled ?? state.settings.notificationsEnabled,
@@ -665,10 +669,13 @@ final class RewardStore: ObservableObject {
               state.kids.contains(where: { allowancePoints(for: $0) > 0 }) else {
             return false
         }
-        if let lastApplied = state.settings.lastAllowanceAppliedAt,
-           !isDue(since: lastApplied, recurrence: recurrence, now: now) {
-            return false
-        }
+        guard RecurrenceSchedule.allowanceIsDue(
+            since: state.settings.lastAllowanceAppliedAt,
+            recurrence: recurrence,
+            weekday: state.settings.allowanceWeekday,
+            monthDay: state.settings.allowanceMonthDay,
+            now: now
+        ) else { return false }
 
         if state.settings.approvalFlowEnabled {
             var queuedAny = false
@@ -700,6 +707,28 @@ final class RewardStore: ObservableObject {
         if let lastApplied = state.settings.lastInterestAppliedAt,
            !isDue(since: lastApplied, recurrence: recurrence, now: now) {
             return false
+        }
+
+        if state.settings.approvalFlowEnabled {
+            var queuedAny = false
+            for kid in state.kids {
+                let points = interestPoints(for: kid)
+                guard points > 0,
+                      pendingApprovalRequest(kind: .interest, kidID: kid.id) == nil else {
+                    continue
+                }
+                addApprovalRequest(
+                    kidID: kid.id,
+                    kind: .interest,
+                    points: points,
+                    note: "Vault interest request"
+                )
+                queuedAny = true
+            }
+            guard queuedAny else { return false }
+            save()
+            RewardNotifications.reschedule(using: self)
+            return true
         }
 
         var appliedAny = false
@@ -748,6 +777,22 @@ final class RewardStore: ObservableObject {
         state.settings.interestRecurrence = recurrence
         save()
         RewardNotifications.reschedule(using: self)
+    }
+
+    func setAllowanceRecurrence(_ recurrence: RewardTask.Recurrence) {
+        state.settings.allowanceRecurrence = recurrence
+        save()
+        RewardNotifications.reschedule(using: self)
+    }
+
+    func setAllowanceWeekday(_ weekday: Int?) {
+        state.settings.allowanceWeekday = weekday
+        save()
+    }
+
+    func setAllowanceMonthDay(_ day: Int?) {
+        state.settings.allowanceMonthDay = day
+        save()
     }
 
     @discardableResult
@@ -824,6 +869,9 @@ final class RewardStore: ObservableObject {
             didApply = cashOutExact(points: currentRequest.points, for: kid)
         case .interest:
             didApply = applyInterest(points: currentRequest.points, to: kid)
+            if didApply {
+                recordInterestScheduleApplied()
+            }
         case .choreCompleted:
             guard let taskID = currentRequest.taskID,
                   let task = state.tasks.first(where: { $0.id == taskID }) else {
@@ -980,6 +1028,11 @@ final class RewardStore: ObservableObject {
     private func recordAllowanceScheduleApplied(at date: Date = Date()) {
         guard state.settings.allowanceRecurrence != .none else { return }
         state.settings.lastAllowanceAppliedAt = date
+    }
+
+    private func recordInterestScheduleApplied(at date: Date = Date()) {
+        guard state.settings.interestRecurrence != .none else { return }
+        state.settings.lastInterestAppliedAt = date
     }
 
     private func taskCompletion(for task: RewardTask, kid: Kid) -> TaskCompletion? {

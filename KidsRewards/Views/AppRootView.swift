@@ -37,7 +37,7 @@ struct AppRootView: View {
         let minimumDisplay = Duration.milliseconds(850)
         try? await Task.sleep(for: minimumDisplay)
 
-        withAnimation(.easeOut(duration: 0.32)) {
+        withAnimation(KidCoinMotion.modal) {
             isShowingLoadingScreen = false
         }
     }

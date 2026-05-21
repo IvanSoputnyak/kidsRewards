@@ -432,7 +432,8 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.kids.map(\.availablePoints), [4, 6])
         XCTAssertEqual(store.state.transactions.count, 2)
         XCTAssertEqual(store.state.transactions.map(\.note), ["Allowance", "Allowance"])
-        XCTAssertEqual(store.state.settings.lastAllowanceAppliedAt, appliedAt)
+        // lastAllowanceAppliedAt is only recorded when a recurring schedule is active;
+        // with .none recurrence the field stays nil intentionally.
     }
 
     func testApplyAllowanceToSingleKidOnlyAffectsThatKid() {
@@ -474,7 +475,7 @@ final class RewardStoreTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
-        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
         let midWeek = try XCTUnwrap(calendar.date(byAdding: .day, value: 3, to: start))
         let nextWeek = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: start))
         let kids = [
@@ -695,7 +696,7 @@ final class RewardStoreTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
-        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
+        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
         let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: lastWeek))
         var settings = RewardSettings.defaults
         settings.allowancePoints = 4
@@ -748,7 +749,7 @@ final class RewardStoreTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
-        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
+        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
         let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: lastWeek))
         var settings = RewardSettings.defaults
         settings.allowancePoints = 4
@@ -1435,8 +1436,11 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.transactions.last?.kind, .interest)
     }
 
-    func testAutomaticInterestAppliesOnlyWhenRecurrenceIsDue() {
-        let start = Date(timeIntervalSince1970: 4_102_444_800)
+    func testAutomaticInterestAppliesOnlyWhenRecurrenceIsDue() throws {
+        // Jan 3, 2100 is Sunday (weekday 1) — a clean week boundary.
+        // +3 days = Wed Jan 6 (same week) → not due; +8 days = Mon Jan 11 (next week) → due.
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
         let kids = [
             Kid(name: "Avery", availablePoints: 0, vaultPoints: 100),
             Kid(name: "Milo", availablePoints: 0, vaultPoints: 20)
@@ -1448,10 +1452,7 @@ final class RewardStoreTests: XCTestCase {
             interestRecurrence: .weekly,
             lastInterestAppliedAt: start
         )
-        let store = RewardStore(
-            initialState: RewardState(kids: kids, tasks: [], settings: settings, transactions: []),
-            fileURL: temporaryStateURL()
-        )
+        let store = makeStore(kids: kids, settings: settings)
 
         XCTAssertEqual(store.state.kids.map(\.vaultPoints), [100, 20])
 
@@ -1461,6 +1462,49 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.kids[0].vaultPoints, 105)
         XCTAssertEqual(store.state.kids[1].vaultPoints, 21)
         XCTAssertEqual(store.state.transactions.filter { $0.kind == .interest }.count, 2)
+    }
+
+    func testScheduledInterestQueuesApprovalRequestsWhenApprovalFlowEnabled() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        settings.interestRecurrence = .daily
+        settings.lastInterestAppliedAt = start
+        let kids = [
+            Kid(name: "Avery", availablePoints: 0, vaultPoints: 100),
+            Kid(name: "Milo", availablePoints: 0, vaultPoints: 20)
+        ]
+        let store = makeStore(kids: kids, settings: settings)
+
+        XCTAssertTrue(store.applyDueInterestIfNeeded(now: now))
+
+        XCTAssertEqual(store.state.kids.map(\.vaultPoints), [100, 20])
+        XCTAssertEqual(store.state.approvalRequests.map(\.kind), [.interest, .interest])
+        XCTAssertEqual(store.state.approvalRequests.map(\.points), [5, 1])
+        XCTAssertTrue(store.state.transactions.isEmpty)
+        XCTAssertEqual(store.state.settings.lastInterestAppliedAt, start)
+    }
+
+    func testApprovingScheduledInterestMarksScheduleApplied() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        settings.interestRecurrence = .daily
+        settings.lastInterestAppliedAt = start
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertTrue(store.applyDueInterestIfNeeded(now: now))
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 105)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertNotNil(store.state.settings.lastInterestAppliedAt)
+        XCTAssertNotEqual(store.state.settings.lastInterestAppliedAt, start)
     }
 
     func testApplyDueInterestSkippedWhenRecurrenceOff() {
@@ -1620,7 +1664,9 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(plan.count, 2)
         XCTAssertEqual(plan[0].identifier, RewardNotifications.allowanceIdentifier)
         XCTAssertEqual(plan[1].identifier, RewardNotifications.interestIdentifier)
-        XCTAssertEqual(plan[0].delay, 24 * 60 * 60)
+        // Delays are calendar-relative; verify they are positive and within one recurrence window.
+        XCTAssertGreaterThanOrEqual(plan[0].delay, RewardNotifications.minimumDelay)
+        XCTAssertLessThanOrEqual(plan[0].delay, 25 * 60 * 60)
         XCTAssertGreaterThanOrEqual(plan[1].delay, RewardNotifications.minimumDelay)
     }
 
@@ -1695,6 +1741,1119 @@ final class RewardStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(transaction.pointsDisplayLabel, "-4")
+    }
+
+    // MARK: - Biweekly / Monthly recurrence
+
+    func testBiweeklyIsDueOnlyAfterTwoCalendarWeeks() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let oneWeekLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: anchor))
+        let twoWeeksLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 14, to: anchor))
+
+        XCTAssertFalse(RecurrenceSchedule.isDue(since: anchor, recurrence: .biweekly, now: anchor, calendar: calendar))
+        XCTAssertFalse(RecurrenceSchedule.isDue(since: anchor, recurrence: .biweekly, now: oneWeekLater, calendar: calendar))
+        XCTAssertTrue(RecurrenceSchedule.isDue(since: anchor, recurrence: .biweekly, now: twoWeeksLater, calendar: calendar))
+    }
+
+    func testMonthlyIsDueOnlyInNewCalendarMonth() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 15, hour: 12)))
+        let sameMonthLate = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 31, hour: 12)))
+        let nextMonthFirst = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 1, hour: 12)))
+
+        XCTAssertFalse(RecurrenceSchedule.isDue(since: anchor, recurrence: .monthly, now: sameMonthLate, calendar: calendar))
+        XCTAssertTrue(RecurrenceSchedule.isDue(since: anchor, recurrence: .monthly, now: nextMonthFirst, calendar: calendar))
+    }
+
+    // MARK: - allowanceIsDue
+
+    func testAllowanceIsDueTrueWhenNeverApplied() {
+        let now = Date(timeIntervalSince1970: 4_000_000_000)
+
+        XCTAssertTrue(RecurrenceSchedule.allowanceIsDue(since: nil, recurrence: .weekly, weekday: nil, monthDay: nil, now: now))
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: nil, recurrence: .none, weekday: nil, monthDay: nil, now: now))
+    }
+
+    func testAllowanceWeeklyDueOnTargetWeekday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        // Jan 3, 2100 = Sunday (weekday 1)
+        let lastApplied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        // Jan 6 = Wednesday (weekday 4), same week as Jan 3 → not due
+        let sameWeekWed = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 6, hour: 12)))
+        // Jan 10 = Sunday (weekday 1), next week but before target weekday 4 → not due
+        let nextWeekSun = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 10, hour: 12)))
+        // Jan 13 = Wednesday (weekday 4), next week on target weekday → due
+        let nextWeekWed = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 13, hour: 12)))
+
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .weekly, weekday: 4, monthDay: nil, now: sameWeekWed, calendar: calendar))
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .weekly, weekday: 4, monthDay: nil, now: nextWeekSun, calendar: calendar))
+        XCTAssertTrue(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .weekly, weekday: 4, monthDay: nil, now: nextWeekWed, calendar: calendar))
+    }
+
+    func testAllowanceBiweeklyDueOnTargetWeekdayAfterTwoWeeks() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        // Jan 3 = Sunday (weekday 1)
+        let lastApplied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        // Jan 10 = Sunday (1 week later) → not due
+        let oneWeekLater = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 10, hour: 12)))
+        // Jan 17 = Sunday (2 weeks later), before target weekday 4 (Wed) → not due
+        let twoWeeksLaterSun = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 17, hour: 12)))
+        // Jan 20 = Wednesday (2 weeks + 3 days), on target weekday → due
+        let twoWeeksLaterWed = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 20, hour: 12)))
+
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .biweekly, weekday: 4, monthDay: nil, now: oneWeekLater, calendar: calendar))
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .biweekly, weekday: 4, monthDay: nil, now: twoWeeksLaterSun, calendar: calendar))
+        XCTAssertTrue(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .biweekly, weekday: 4, monthDay: nil, now: twoWeeksLaterWed, calendar: calendar))
+    }
+
+    func testAllowanceMonthlyDueOnTargetDayInNextMonth() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        // Last applied on the 25th (the target day)
+        let lastApplied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 25, hour: 12)))
+        // Same day again → not due
+        let sameDayAgain = lastApplied
+        // Next month before target day → not due
+        let nextMonthBeforeDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 20, hour: 12)))
+        // Next month on target day → due
+        let nextMonthOnDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 25, hour: 12)))
+
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .monthly, weekday: nil, monthDay: 25, now: sameDayAgain, calendar: calendar))
+        XCTAssertFalse(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .monthly, weekday: nil, monthDay: 25, now: nextMonthBeforeDay, calendar: calendar))
+        XCTAssertTrue(RecurrenceSchedule.allowanceIsDue(since: lastApplied, recurrence: .monthly, weekday: nil, monthDay: 25, now: nextMonthOnDay, calendar: calendar))
+    }
+
+    // MARK: - Store setters for allowance schedule
+
+    func testSetAllowanceRecurrencePersistsInSettings() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        store.setAllowanceRecurrence(.biweekly)
+
+        XCTAssertEqual(store.state.settings.allowanceRecurrence, .biweekly)
+    }
+
+    func testSetAllowanceWeekdayPersistsInSettings() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        store.setAllowanceWeekday(3)
+
+        XCTAssertEqual(store.state.settings.allowanceWeekday, 3)
+    }
+
+    func testSetAllowanceMonthDayPersistsInSettings() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        store.setAllowanceMonthDay(15)
+
+        XCTAssertEqual(store.state.settings.allowanceMonthDay, 15)
+    }
+
+    func testAllowanceScheduleSettingsRoundTrip() throws {
+        var settings = RewardSettings.defaults
+        settings.allowanceWeekday = 3
+        settings.allowanceMonthDay = 15
+        let state = RewardState(kids: [], tasks: [], settings: settings, transactions: [])
+
+        let data = try JSONEncoder.configuredForTests.encode(state)
+        let decoded = try JSONDecoder.configuredForTests.decode(RewardState.self, from: data)
+
+        XCTAssertEqual(decoded.settings.allowanceWeekday, 3)
+        XCTAssertEqual(decoded.settings.allowanceMonthDay, 15)
+    }
+
+    func testUpdateSettingsPreservesAllowanceWeekdayAndMonthDay() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+        store.setAllowanceWeekday(5)
+        store.setAllowanceMonthDay(20)
+
+        store.updateSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+
+        XCTAssertEqual(store.state.settings.allowanceWeekday, 5)
+        XCTAssertEqual(store.state.settings.allowanceMonthDay, 20)
+    }
+
+    // MARK: - isAllowanceScheduleDue with new recurrences
+
+    func testIsAllowanceScheduleDueRespectsBiweeklySchedule() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let oneWeekLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: applied))
+        let twoWeeksLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 14, to: applied))
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 3,
+            allowanceRecurrence: .biweekly
+        )
+        settings.lastAllowanceAppliedAt = applied
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)], settings: settings)
+
+        XCTAssertFalse(store.isAllowanceScheduleDue(now: oneWeekLater))
+        XCTAssertTrue(store.isAllowanceScheduleDue(now: twoWeeksLater))
+    }
+
+    func testIsAllowanceScheduleDueRespectsMonthDaySchedule() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 25, hour: 12)))
+        let nextMonthBeforeDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 20, hour: 12)))
+        let nextMonthOnDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 25, hour: 12)))
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 3,
+            allowanceRecurrence: .monthly
+        )
+        settings.allowanceMonthDay = 25
+        settings.lastAllowanceAppliedAt = applied
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)], settings: settings)
+
+        XCTAssertFalse(store.isAllowanceScheduleDue(now: nextMonthBeforeDay))
+        XCTAssertTrue(store.isAllowanceScheduleDue(now: nextMonthOnDay))
+    }
+
+    // MARK: - applyDueAllowanceIfNeeded with new recurrences
+
+    func testApplyDueBiweeklyAllowanceAppliesAfterTwoWeeks() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let oneWeekLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: applied))
+        let twoWeeksLater = try XCTUnwrap(calendar.date(byAdding: .day, value: 14, to: applied))
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 5,
+            allowanceRecurrence: .biweekly
+        )
+        settings.lastAllowanceAppliedAt = applied
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertFalse(store.applyDueAllowanceIfNeeded(now: oneWeekLater))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+
+        XCTAssertTrue(store.applyDueAllowanceIfNeeded(now: twoWeeksLater))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+    }
+
+    func testApplyDueMonthlyAllowanceAppliesOnTargetDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 25, hour: 12)))
+        let nextMonthBeforeDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 20, hour: 12)))
+        let nextMonthOnDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 25, hour: 12)))
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 5,
+            allowanceRecurrence: .monthly
+        )
+        settings.allowanceMonthDay = 25
+        settings.lastAllowanceAppliedAt = applied
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertFalse(store.applyDueAllowanceIfNeeded(now: nextMonthBeforeDay))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+
+        XCTAssertTrue(store.applyDueAllowanceIfNeeded(now: nextMonthOnDay))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+    }
+
+    func testApplyDueWeeklyAllowanceWithWeekdayFiresOnTargetDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        // Jan 3, 2100 = Sunday (weekday 1)
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        // Jan 10 = Sunday (weekday 1), next week but before target Wed (4) → not due
+        let nextWeekSunday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 10, hour: 12)))
+        // Jan 13 = Wednesday (weekday 4), next week on target → due
+        let nextWeekWednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 13, hour: 12)))
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            allowancePoints: 5,
+            allowanceRecurrence: .weekly
+        )
+        settings.allowanceWeekday = 4
+        settings.lastAllowanceAppliedAt = applied
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertFalse(store.applyDueAllowanceIfNeeded(now: nextWeekSunday))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+
+        XCTAssertTrue(store.applyDueAllowanceIfNeeded(now: nextWeekWednesday))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+    }
+
+    // MARK: - Child mode store behavior
+
+    func testChildModeChoreRequestQueuedWhenApprovalFlowEnabled() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], tasks: [task], settings: settings)
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        let req = store.state.approvalRequests[0]
+        XCTAssertEqual(req.kind, .choreCompleted)
+        XCTAssertEqual(req.kidID, kid.id)
+        XCTAssertEqual(req.taskID, task.id)
+        XCTAssertEqual(req.points, 3)
+    }
+
+    func testChildModeChoreRequestIgnoredWhenApprovalFlowDisabled() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testChildModeChoreButtonPendingStateDetectedViaPendingApprovalRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], tasks: [task], settings: settings)
+
+        XCTAssertNil(store.pendingApprovalRequest(kind: .choreCompleted, kidID: kid.id, taskID: task.id))
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+
+        XCTAssertNotNil(store.pendingApprovalRequest(kind: .choreCompleted, kidID: kid.id, taskID: task.id))
+    }
+
+    func testChildModeChoreApprovalGrantsPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], tasks: [task], settings: settings)
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 3)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.kind, .earned)
+    }
+
+    func testChildModeInterestIgnoredWhenVaultIsEmpty() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 0)
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.1
+        )
+        let store = makeStore(kids: [kid], settings: settings)
+        store.setApprovalFlowEnabled(true)
+
+        store.requestInterest(for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testChildModeInterestQueuedWhenVaultHasPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 10)
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.1
+        )
+        let store = makeStore(kids: [kid], settings: settings)
+        store.setApprovalFlowEnabled(true)
+
+        store.requestInterest(for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.approvalRequests[0].kind, .interest)
+        XCTAssertEqual(store.state.approvalRequests[0].points, 1)
+    }
+
+    func testChildModeInterestIgnoredWhenApprovalFlowDisabled() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.1
+        )
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestInterest(for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testChildModeInterestDeduplicatesPendingRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 10)
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.1
+        )
+        let store = makeStore(kids: [kid], settings: settings)
+        store.setApprovalFlowEnabled(true)
+
+        store.requestInterest(for: store.state.kids[0])
+        store.requestInterest(for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+    }
+
+    func testChildModeCashOutIgnoredWhenAvailableIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestCashOut(points: 5, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testChildModeCashOutDeduplicatesPendingRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestCashOut(points: 3, for: store.state.kids[0])
+        let firstID = store.state.approvalRequests[0].id
+
+        store.requestCashOut(points: 5, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertNotEqual(store.state.approvalRequests[0].id, firstID)
+        XCTAssertEqual(store.state.approvalRequests[0].points, 5)
+    }
+
+    func testChildModeDepositIgnoredWhenAvailableIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestDeposit(points: 5, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testChildModeDepositDeduplicatesPendingRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestDeposit(points: 2, for: store.state.kids[0])
+        let firstID = store.state.approvalRequests[0].id
+
+        store.requestDeposit(points: 4, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertNotEqual(store.state.approvalRequests[0].id, firstID)
+        XCTAssertEqual(store.state.approvalRequests[0].points, 4)
+    }
+
+    func testChildModeHistoryCapAt10Transactions() {
+        let kid = Kid(name: "Avery", availablePoints: 100, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = false
+        let store = makeStore(kids: [kid], settings: settings)
+        let liveKid = store.state.kids[0]
+
+        for i in 1...12 {
+            store.adjust(points: 1, note: "Bonus \(i)", for: store.state.kids[0])
+        }
+
+        let history = store.transactions(for: liveKid)
+        XCTAssertEqual(history.count, 12)
+
+        let capped = Array(history.prefix(10))
+        XCTAssertEqual(capped.count, 10)
+    }
+
+    func testChildModeMultiKidPendingStateIsPerKid() {
+        let kidA = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let kidB = Kid(name: "Blake", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kidA, kidB], tasks: [task], settings: settings)
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+
+        XCTAssertNotNil(store.pendingApprovalRequest(kind: .choreCompleted, kidID: kidA.id, taskID: task.id))
+        XCTAssertNil(store.pendingApprovalRequest(kind: .choreCompleted, kidID: kidB.id, taskID: task.id))
+    }
+
+    func testChildModeCashOutFullEndToEnd() {
+        let kid = Kid(name: "Avery", availablePoints: 8, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestCashOut(points: 5, for: store.state.kids[0])
+        XCTAssertEqual(store.state.kids[0].availablePoints, 8, "Points unchanged before approval")
+
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 3)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.kind, .cashedOut)
+    }
+
+    func testChildModeDepositFullEndToEnd() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 2)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestDeposit(points: 4, for: store.state.kids[0])
+        XCTAssertEqual(store.state.kids[0].availablePoints, 10, "Available unchanged before approval")
+
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 6)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 6)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    // MARK: - Kid management
+
+    func testAddKidAppendsNewKid() {
+        let store = makeStore(kids: [])
+
+        store.addKid(name: "Avery")
+
+        XCTAssertEqual(store.state.kids.count, 1)
+        XCTAssertEqual(store.state.kids[0].name, "Avery")
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 0)
+    }
+
+    func testAddKidIgnoresBlankName() {
+        let store = makeStore(kids: [])
+
+        store.addKid(name: "   ")
+
+        XCTAssertTrue(store.state.kids.isEmpty)
+    }
+
+    func testAddKidTrimsWhitespace() {
+        let store = makeStore(kids: [])
+
+        store.addKid(name: "  Avery  ")
+
+        XCTAssertEqual(store.state.kids[0].name, "Avery")
+    }
+
+    func testKidWithIDReturnsCorrectKid() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 2)
+        let store = makeStore(kids: [kid])
+
+        XCTAssertEqual(store.kid(withID: kid.id), store.state.kids[0])
+    }
+
+    func testKidWithIDReturnsNilForUnknownID() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        XCTAssertNil(store.kid(withID: UUID()))
+    }
+
+    func testKidNameForKnownIDReturnsName() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        XCTAssertEqual(store.kidName(for: kid.id), "Avery")
+    }
+
+    func testKidNameForUnknownIDReturnsUnknown() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        XCTAssertEqual(store.kidName(for: UUID()), "Unknown")
+    }
+
+    func testUpdateKidAllowancePointsSetsOverride() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.updateKidAllowancePoints(store.state.kids[0], points: 10)
+
+        XCTAssertEqual(store.state.kids[0].allowancePoints, 10)
+    }
+
+    func testUpdateKidAllowancePointsNilClearsOverride() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, allowancePoints: 8)
+        let store = makeStore(kids: [kid])
+
+        store.updateKidAllowancePoints(store.state.kids[0], points: nil)
+
+        XCTAssertNil(store.state.kids[0].allowancePoints)
+    }
+
+    func testUpdateKidAllowancePointsClampsNegativeToZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.updateKidAllowancePoints(store.state.kids[0], points: -5)
+
+        XCTAssertEqual(store.state.kids[0].allowancePoints, 0)
+    }
+
+    func testClearSavingsGoalRemovesGoal() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, savingsGoal: SavingsGoal(title: "Bike", targetPoints: 50))
+        let store = makeStore(kids: [kid])
+
+        store.clearSavingsGoal(for: store.state.kids[0])
+
+        XCTAssertNil(store.state.kids[0].savingsGoal)
+    }
+
+    func testPendingRequestCountPerKid() {
+        let kidA = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        let kidB = Kid(name: "Blake", availablePoints: 10, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kidA, kidB], settings: settings)
+
+        store.requestCashOut(points: 5, for: store.state.kids[0])
+        store.requestDeposit(points: 3, for: store.state.kids[0])
+
+        XCTAssertEqual(store.pendingRequestCount(for: store.state.kids[0]), 2)
+        XCTAssertEqual(store.pendingRequestCount(for: store.state.kids[1]), 0)
+    }
+
+    // MARK: - Chore helpers
+
+    func testTotalReadyChoreCountAcrossAllKids() {
+        let kidA = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let kidB = Kid(name: "Blake", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3, assignedKidIDs: [])
+        let store = makeStore(kids: [kidA, kidB], tasks: [task])
+
+        XCTAssertEqual(store.totalReadyChoreCount(), 2)
+    }
+
+    func testFirstKidWithReadyChoresReturnsNilWhenNoChores() {
+        let store = makeStore(kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)])
+
+        XCTAssertNil(store.firstKidWithReadyChores())
+    }
+
+    func testFirstKidWithReadyChoresReturnsKidWithTasks() {
+        let kidA = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let kidB = Kid(name: "Blake", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3, assignedKidIDs: [kidB.id])
+        let store = makeStore(kids: [kidA, kidB], tasks: [task])
+
+        XCTAssertEqual(store.firstKidWithReadyChores()?.id, kidB.id)
+    }
+
+    func testFirstKidEligibleForVaultInterestReturnsNilWhenAllEmpty() {
+        let store = makeStore(kids: [
+            Kid(name: "Avery", availablePoints: 5, vaultPoints: 0),
+            Kid(name: "Blake", availablePoints: 3, vaultPoints: 0)
+        ])
+
+        XCTAssertNil(store.firstKidEligibleForVaultInterest())
+    }
+
+    func testFirstKidEligibleForVaultInterestReturnsFirstWithNonZeroVault() {
+        let kidA = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        // 20 vault * 0.05 rate = 1 whole interest point → eligible
+        let kidB = Kid(name: "Blake", availablePoints: 0, vaultPoints: 20)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kidA, kidB], settings: settings)
+
+        XCTAssertEqual(store.firstKidEligibleForVaultInterest()?.id, kidB.id)
+    }
+
+    // MARK: - Transaction queries
+
+    func testEarnedPointsInIntervalSumsOnlyEarnedTransactions() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let interval = DateInterval(start: now.addingTimeInterval(-100), end: now.addingTimeInterval(100))
+
+        store.adjust(points: 3, note: "Bonus", for: store.state.kids[0])
+        store.award(task: RewardTask(title: "Sweep", points: 5, assignedKidIDs: [kid.id]),
+                    to: store.state.kids[0], at: now)
+
+        let earned = store.earnedPoints(in: interval)
+        XCTAssertEqual(earned, 5)
+    }
+
+    func testEarnedPointsInIntervalExcludesOutOfRangeTransactions() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let taskA = RewardTask(title: "Sweep", points: 5, assignedKidIDs: [kid.id])
+        let taskB = RewardTask(title: "Dishes", points: 3, assignedKidIDs: [kid.id])
+        let store = makeStore(kids: [kid], tasks: [taskA, taskB])
+        let pivot = Date(timeIntervalSince1970: 1_000_000)
+
+        store.award(task: taskA, to: store.state.kids[0], at: pivot.addingTimeInterval(-200))
+        store.award(task: taskB, to: store.state.kids[0], at: pivot)
+
+        let interval = DateInterval(start: pivot.addingTimeInterval(-100), end: pivot.addingTimeInterval(100))
+        XCTAssertEqual(store.earnedPoints(in: interval), 3)
+    }
+
+    func testLastTransactionReturnsNilWhenNoTransactions() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        XCTAssertNil(store.lastTransaction(for: store.state.kids[0]))
+    }
+
+    func testLastTransactionReturnsNewestTransaction() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let taskA = RewardTask(title: "Sweep", points: 2, assignedKidIDs: [kid.id])
+        let taskB = RewardTask(title: "Dishes", points: 3, assignedKidIDs: [kid.id])
+        let store = makeStore(kids: [kid], tasks: [taskA, taskB])
+        let t1 = Date(timeIntervalSince1970: 1_000_000)
+        let t2 = Date(timeIntervalSince1970: 2_000_000)
+
+        store.award(task: taskA, to: store.state.kids[0], at: t1)
+        store.award(task: taskB, to: store.state.kids[0], at: t2)
+
+        XCTAssertEqual(store.lastTransaction(for: store.state.kids[0])?.date, t2)
+    }
+
+    // MARK: - Aggregated point totals
+
+    func testTotalAvailableVaultAndHouseholdPoints() {
+        let store = makeStore(kids: [
+            Kid(name: "Avery", availablePoints: 10, vaultPoints: 5),
+            Kid(name: "Blake", availablePoints: 3, vaultPoints: 7)
+        ])
+
+        XCTAssertEqual(store.totalAvailablePoints, 13)
+        XCTAssertEqual(store.totalVaultPoints, 12)
+        XCTAssertEqual(store.totalHouseholdPoints, 25)
+    }
+
+    func testPendingApprovalCountMatchesApprovalRequestsArray() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestCashOut(points: 3, for: store.state.kids[0])
+        store.requestDeposit(points: 2, for: store.state.kids[0])
+
+        XCTAssertEqual(store.pendingApprovalCount, 2)
+        XCTAssertEqual(store.pendingApprovalCount, store.state.approvalRequests.count)
+    }
+
+    // MARK: - Direct cashOut (without approval flow)
+
+    func testDirectCashOutDeductsAvailablePoints() {
+        let kid = Kid(name: "Avery", availablePoints: 8, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        let result = store.cashOut(points: 5, for: store.state.kids[0])
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 3)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.kind, .cashedOut)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.points, 5)
+    }
+
+    func testDirectCashOutCapsAtAvailablePoints() {
+        let kid = Kid(name: "Avery", availablePoints: 6, vaultPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        let result = store.cashOut(points: 100, for: store.state.kids[0])
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.points, 6)
+    }
+
+    func testDirectCashOutReturnsFalseWhenAvailableIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 5)
+        let store = makeStore(kids: [kid])
+
+        let result = store.cashOut(points: 5, for: store.state.kids[0])
+
+        XCTAssertFalse(result)
+        XCTAssertTrue(store.state.transactions.isEmpty)
+    }
+
+    func testDirectCashOutRecordsCurrencyAmount() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 2, vaultInterestRate: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.cashOut(points: 4, for: store.state.kids[0])
+
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.currencyAmount, 8)
+    }
+
+    // MARK: - Interest schedule
+
+    func testIsInterestScheduleDueWhenNeverApplied() {
+        var settings = RewardSettings.defaults
+        settings.interestRecurrence = .daily
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)],
+            settings: settings
+        )
+
+        XCTAssertTrue(store.isInterestScheduleDue())
+    }
+
+    func testIsInterestScheduleDueRespectsDueDate() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let sameDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 14)))
+        var settings = RewardSettings.defaults
+        settings.interestRecurrence = .daily
+        settings.lastInterestAppliedAt = applied
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)],
+            settings: settings
+        )
+
+        XCTAssertFalse(store.isInterestScheduleDue(now: sameDay))
+    }
+
+    func testIsInterestScheduleDueReturnsFalseWhenRecurrenceOff() {
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)]
+        )
+
+        XCTAssertFalse(store.isInterestScheduleDue())
+    }
+
+    func testIsInterestScheduleDueReturnsFalseWhenNoVaultBalance() {
+        var settings = RewardSettings.defaults
+        settings.interestRecurrence = .daily
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 5, vaultPoints: 0)],
+            settings: settings
+        )
+
+        XCTAssertFalse(store.isInterestScheduleDue())
+    }
+
+    func testInterestPointsWithFractionalResultBelowHalfRoundsToZero() {
+        // 5 * 0.05 = 0.25 → rounds to 0
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 5)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertEqual(store.interestPoints(for: store.state.kids[0]), 0)
+    }
+
+    func testInterestPointsWithLargeVaultProducesWholeNumber() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertEqual(store.interestPoints(for: store.state.kids[0]), 5)
+    }
+
+    // MARK: - Currency value
+
+    func testCurrencyValueMultipliesPointsByCurrencyPerPoint() {
+        let store = makeStore(
+            kids: [],
+            settings: RewardSettings(currencyCode: "USD", currencyPerPoint: 2, vaultInterestRate: 0)
+        )
+
+        assertDecimalEqual(store.currencyValue(for: 5), 10)
+    }
+
+    func testCurrencyValueWithZeroCurrencyPerPoint() {
+        let store = makeStore(
+            kids: [],
+            settings: RewardSettings(currencyCode: "USD", currencyPerPoint: 0, vaultInterestRate: 0)
+        )
+
+        assertDecimalEqual(store.currencyValue(for: 10), 0)
+    }
+
+    // MARK: - Export / import round-trip
+
+    func testExportStateDataProducesDecodableState() throws {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 3)
+        let task = RewardTask(title: "Sweep", points: 2)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        let data = try XCTUnwrap(store.exportStateData())
+        let preview = try XCTUnwrap(store.importPreview(from: data))
+
+        XCTAssertEqual(preview.kidsCount, 1)
+        XCTAssertEqual(preview.tasksCount, 1)
+        XCTAssertFalse(preview.isCloudBackup)
+    }
+
+    func testExportedStateDataCanBeReimported() throws {
+        let kid = Kid(name: "Avery", availablePoints: 7, vaultPoints: 2)
+        let original = makeStore(kids: [kid])
+        let data = try XCTUnwrap(original.exportStateData())
+
+        let restored = makeStore(kids: [])
+        XCTAssertTrue(restored.importStateData(data))
+
+        XCTAssertEqual(restored.state.kids.count, 1)
+        XCTAssertEqual(restored.state.kids[0].name, "Avery")
+        XCTAssertEqual(restored.state.kids[0].availablePoints, 7)
+    }
+
+    // MARK: - Parent PIN lockout countdown
+
+    func testParentPINLockoutRemainingSecondsWhenNotLockedOut() {
+        let store = makeStore(kids: [])
+
+        XCTAssertEqual(store.parentPINLockoutRemainingSeconds(), 0)
+    }
+
+    func testParentPINLockoutRemainingSecondsWhenLockoutHasLapsed() async {
+        let pinManager = RecordingParentPINManager()
+        pinManager.save(pin: "1234")
+        let store = RewardStore(
+            initialState: .empty,
+            fileURL: temporaryStateURL(),
+            pinManager: pinManager
+        )
+        // Trigger lockout using a timestamp 3 minutes ago → lockoutUntil = 2 min ago → already lapsed
+        let threeMinutesAgo = Date(timeIntervalSinceNow: -180)
+        for _ in 0..<5 {
+            _ = await store.verifyParentPIN("wrong", now: threeMinutesAgo)
+        }
+
+        XCTAssertEqual(store.parentPINLockoutRemainingSeconds(now: Date()), 0)
+    }
+
+    // MARK: - RecurrenceSchedule.nextOccurrence
+
+    func testNextOccurrenceNoneReturnsNil() {
+        let result = RecurrenceSchedule.nextOccurrence(
+            after: nil,
+            recurrence: .none,
+            from: Date()
+        )
+        XCTAssertNil(result)
+    }
+
+    func testNextOccurrenceDailyFromNilAnchorIsNextDay() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 8)))
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: nil,
+            recurrence: .daily,
+            from: now,
+            calendar: calendar
+        ))
+
+        let nextDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 4)))
+        XCTAssertEqual(next, nextDay)
+    }
+
+    func testNextOccurrenceDailyFromAnchorIsNextDay() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 13)))
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .daily,
+            from: now,
+            calendar: calendar
+        ))
+
+        let nextDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 4)))
+        XCTAssertEqual(next, nextDay)
+    }
+
+    func testNextOccurrenceWeeklyAdvancesOneWeek() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        // Jan 3, 2100 = Sunday = start of week
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .weekly,
+            from: now,
+            calendar: calendar
+        ))
+
+        let expectedWeekStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 10)))
+        XCTAssertEqual(next, expectedWeekStart)
+    }
+
+    func testNextOccurrenceBiweeklyAdvancesTwoWeeks() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .biweekly,
+            from: now,
+            calendar: calendar
+        ))
+
+        let expectedWeekStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 17)))
+        XCTAssertEqual(next, expectedWeekStart)
+    }
+
+    func testNextOccurrenceMonthlyAdvancesToStartOfNextMonth() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 15, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .monthly,
+            from: now,
+            calendar: calendar
+        ))
+
+        let expectedMonthStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 1)))
+        XCTAssertEqual(next, expectedMonthStart)
+    }
+
+    func testNextOccurrenceMonthlyWrapsToJanuaryForDecemberAnchor() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2099, month: 12, day: 10, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .monthly,
+            from: now,
+            calendar: calendar
+        ))
+
+        let expectedMonthStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 1)))
+        XCTAssertEqual(next, expectedMonthStart)
+    }
+
+    func testNextOccurrenceReturnsCurDateWhenAnchorIsInFuture() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 6, day: 1)))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3)))
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .daily,
+            from: now,
+            calendar: calendar
+        ))
+
+        XCTAssertGreaterThanOrEqual(next, now)
+    }
+
+    // MARK: - Monthly allowance edge cases
+
+    func testMonthlyAllowanceSkipsMonthWithFewerDaysThanTarget() throws {
+        // day=31 in February: Feb has no day 31, so allowance should not fire mid-February
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let lastApplied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 31)))
+        let midFeb = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 15)))
+
+        let due = RecurrenceSchedule.allowanceIsDue(
+            since: lastApplied,
+            recurrence: .monthly,
+            weekday: nil,
+            monthDay: 31,
+            now: midFeb,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(due)
+    }
+
+    func testMonthlyAllowanceFiresOnTargetDayInLongMonth() throws {
+        let calendar = RecurrenceSchedule.configuredCalendar()
+        let lastApplied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 15)))
+        let marchDay15 = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 3, day: 15)))
+
+        let due = RecurrenceSchedule.allowanceIsDue(
+            since: lastApplied,
+            recurrence: .monthly,
+            weekday: nil,
+            monthDay: 15,
+            now: marchDay15,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(due)
+    }
+
+    // MARK: - Transaction display labels
+
+    func testTransactionPointsDisplayLabelAllKinds() {
+        let kidID = UUID()
+        func makeTransaction(kind: RewardTransaction.Kind, points: Int) -> RewardTransaction {
+            RewardTransaction(kidID: kidID, kind: kind, points: points, note: "", date: Date(), currencyAmount: nil)
+        }
+
+        XCTAssertEqual(makeTransaction(kind: .earned,    points: 5).pointsDisplayLabel, "+5")
+        XCTAssertEqual(makeTransaction(kind: .interest,  points: 3).pointsDisplayLabel, "+3")
+        XCTAssertEqual(makeTransaction(kind: .withdrawn, points: 4).pointsDisplayLabel, "+4")
+        XCTAssertEqual(makeTransaction(kind: .cashedOut, points: 7).pointsDisplayLabel, "-7")
+        XCTAssertEqual(makeTransaction(kind: .deposited, points: 6).pointsDisplayLabel, "moved 6")
+        XCTAssertEqual(makeTransaction(kind: .adjusted,  points: 2).pointsDisplayLabel, "+2")
+        XCTAssertEqual(makeTransaction(kind: .adjusted,  points: -3).pointsDisplayLabel, "-3")
+    }
+
+    // MARK: - Allowance applied-at tracking with recurrence
+
+    func testApplyAllowanceToAllKidsRecordsAppliedAtWhenRecurrenceIsSet() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.allowanceRecurrence = .weekly
+        settings.allowancePoints = 4
+        let store = makeStore(kids: [kid], settings: settings)
+        let appliedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        store.applyAllowanceToAllKids(at: appliedAt)
+
+        XCTAssertEqual(store.state.settings.lastAllowanceAppliedAt, appliedAt)
+    }
+
+    func testApplyAllowanceToAllKidsDoesNotRecordAppliedAtWhenRecurrenceIsNone() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.allowanceRecurrence = .none
+        settings.allowancePoints = 4
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.applyAllowanceToAllKids(at: Date())
+
+        XCTAssertNil(store.state.settings.lastAllowanceAppliedAt)
     }
 
     private func makeStore(

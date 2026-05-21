@@ -17,7 +17,9 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     PageHeader(eyebrow: "Household", title: AppBranding.parentAppName) {
                         RoundIconButton(systemImage: "plus") {
-                            showingAddKid = true
+                            withAnimation(KidCoinMotion.modal) {
+                                showingAddKid = true
+                            }
                         }
                         .accessibilityLabel("Add kid")
                     }
@@ -49,13 +51,16 @@ struct DashboardView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .overlay { addAndEditKidModals }
-            .animation(.easeOut(duration: 0.18), value: showingAddKid)
-            .animation(.easeOut(duration: 0.18), value: kidBeingEdited)
+            .animation(KidCoinMotion.modal, value: showingAddKid)
+            .animation(KidCoinMotion.modal, value: kidBeingEdited)
             .navigationDestination(for: Kid.self) { kid in
                 KidDetailView(kidID: kid.id)
             }
             .navigationDestination(for: KidVaultRoute.self) { route in
                 KidVaultView(kidID: route.kidID)
+            }
+            .navigationDestination(for: KidAvailableRoute.self) { route in
+                KidAvailableView(kidID: route.kidID)
             }
             .confirmationDialog(
                 deletionTitle,
@@ -67,7 +72,9 @@ struct DashboardView: View {
             ) {
                 Button("Delete Kid", role: .destructive) {
                     if let kidPendingDeletion {
-                        store.deleteKid(kidPendingDeletion)
+                        withAnimation(KidCoinMotion.list) {
+                            store.deleteKid(kidPendingDeletion)
+                        }
                     }
                     kidPendingDeletion = nil
                 }
@@ -97,15 +104,21 @@ struct DashboardView: View {
                 name: $newKidName,
                 onCancel: {
                     newKidName = ""
-                    showingAddKid = false
+                    withAnimation(KidCoinMotion.modal) {
+                        showingAddKid = false
+                    }
                 },
                 onAdd: {
-                    store.addKid(name: newKidName)
+                    withAnimation(KidCoinMotion.list) {
+                        store.addKid(name: newKidName)
+                    }
                     newKidName = ""
-                    showingAddKid = false
+                    withAnimation(KidCoinMotion.modal) {
+                        showingAddKid = false
+                    }
                 }
             )
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .transition(.kidCoinModal)
         }
 
         if kidBeingEdited != nil {
@@ -113,17 +126,23 @@ struct DashboardView: View {
                 name: $editedKidName,
                 onCancel: {
                     editedKidName = ""
-                    kidBeingEdited = nil
+                    withAnimation(KidCoinMotion.modal) {
+                        kidBeingEdited = nil
+                    }
                 },
                 onSave: {
                     if let kidBeingEdited {
-                        store.updateKid(kidBeingEdited, name: editedKidName)
+                        withAnimation(KidCoinMotion.gentle) {
+                            store.updateKid(kidBeingEdited, name: editedKidName)
+                        }
                     }
                     editedKidName = ""
-                    kidBeingEdited = nil
+                    withAnimation(KidCoinMotion.modal) {
+                        kidBeingEdited = nil
+                    }
                 }
             )
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .transition(.kidCoinModal)
         }
     }
 
@@ -163,7 +182,7 @@ struct DashboardView: View {
                         Button(action: item.action) {
                             AttentionRow(item: item)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                     }
                 }
             }
@@ -223,7 +242,9 @@ struct DashboardView: View {
                     message: "Track points, savings, and allowance for everyone in the family.",
                     actionTitle: "Add Kid"
                 ) {
-                    showingAddKid = true
+                    withAnimation(KidCoinMotion.modal) {
+                        showingAddKid = true
+                    }
                 }
             } else {
                 VStack(spacing: 10) {
@@ -231,7 +252,7 @@ struct DashboardView: View {
                         NavigationLink(value: kid) {
                             DashboardKidCard(kid: kid)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         .swipeActions {
                             Button(role: .destructive) {
                                 kidPendingDeletion = kid
@@ -250,6 +271,7 @@ struct DashboardView: View {
                         }
                     }
                 }
+                .animation(KidCoinMotion.list, value: store.state.kids)
             }
         }
     }
@@ -275,12 +297,13 @@ struct DashboardView: View {
                                     transaction: transaction,
                                     currencyCode: store.state.settings.currencyCode,
                                     variant: .household(kidName: kid.name)
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            )
+                        }
+                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         }
                     }
                 }
+                .animation(KidCoinMotion.list, value: recent)
             }
         }
     }
@@ -462,7 +485,7 @@ private struct QuickActionChip: View {
             .foregroundStyle(foreground)
             .clipShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
     }
 
     private var background: Color {
@@ -520,10 +543,14 @@ private struct DashboardKidCard: View {
                 HStack(spacing: 12) {
                     Label("\(kid.availablePoints) available", systemImage: "star.fill")
                         .foregroundStyle(KidCoinTheme.primary)
+                        .contentTransition(.numericText())
                     Label("\(kid.vaultPoints) vault", systemImage: "lock.fill")
                         .foregroundStyle(KidCoinTheme.mintText)
+                        .contentTransition(.numericText())
                 }
                 .font(.caption)
+                .animation(KidCoinMotion.gentle, value: kid.availablePoints)
+                .animation(KidCoinMotion.gentle, value: kid.vaultPoints)
 
                 if let goal = kid.savingsGoal {
                     let progress = store.savingsGoalProgress(for: kid)
@@ -601,7 +628,7 @@ private struct EditKidModal: View {
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
             }
             .padding(22)
             .frame(maxWidth: 360)
@@ -656,7 +683,7 @@ private struct AddKidModal: View {
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
             }
             .padding(22)
             .frame(maxWidth: 360)

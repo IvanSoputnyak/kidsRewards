@@ -38,7 +38,9 @@ struct TasksView: View {
                     assignedKidIDs: $editedAssignedKidIDs,
                     kids: store.state.kids,
                     onCancel: {
-                        taskBeingEdited = nil
+                        withAnimation(KidCoinMotion.modal) {
+                            taskBeingEdited = nil
+                        }
                         editedTitle = ""
                         editedPoints = 1
                         editedRecurrence = .none
@@ -46,26 +48,30 @@ struct TasksView: View {
                     },
                     onSave: {
                         if let taskBeingEdited {
-                            store.updateTask(
-                                taskBeingEdited,
-                                title: editedTitle,
-                                points: editedPoints,
-                                recurrence: editedRecurrence,
-                                assignedKidIDs: Array(editedAssignedKidIDs)
-                            )
+                            withAnimation(KidCoinMotion.list) {
+                                store.updateTask(
+                                    taskBeingEdited,
+                                    title: editedTitle,
+                                    points: editedPoints,
+                                    recurrence: editedRecurrence,
+                                    assignedKidIDs: Array(editedAssignedKidIDs)
+                                )
+                            }
                         }
-                        taskBeingEdited = nil
+                        withAnimation(KidCoinMotion.modal) {
+                            taskBeingEdited = nil
+                        }
                         editedTitle = ""
                         editedPoints = 1
                         editedRecurrence = .none
                         editedAssignedKidIDs = []
                     }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .transition(.kidCoinModal)
             }
         }
         .kidCoinBackground()
-        .animation(.easeOut(duration: 0.18), value: taskBeingEdited)
+        .animation(KidCoinMotion.modal, value: taskBeingEdited)
     }
 
     private var addWorkCard: some View {
@@ -88,12 +94,11 @@ struct TasksView: View {
                 CounterControl(value: $points, range: 1...100)
             }
 
-            Picker("Repeats", selection: $addRecurrence) {
-                ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .pickerStyle(.segmented)
+            SegmentedPickerRow(
+                selection: $addRecurrence,
+                items: RewardTask.Recurrence.allCases,
+                label: \.label
+            )
 
             KidAssignmentPicker(kids: store.state.kids, selectedKidIDs: $addAssignedKidIDs)
 
@@ -103,12 +108,14 @@ struct TasksView: View {
                 tone: .primary,
                 disabled: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ) {
-                store.addTask(
-                    title: title,
-                    points: points,
-                    recurrence: addRecurrence,
-                    assignedKidIDs: Array(addAssignedKidIDs)
-                )
+                withAnimation(KidCoinMotion.list) {
+                    store.addTask(
+                        title: title,
+                        points: points,
+                        recurrence: addRecurrence,
+                        assignedKidIDs: Array(addAssignedKidIDs)
+                    )
+                }
                 title = ""
                 points = 1
                 addRecurrence = .none
@@ -153,7 +160,9 @@ struct TasksView: View {
                                 .monospacedDigit()
                                 .foregroundStyle(KidCoinTheme.primary)
                             Button {
-                                taskBeingEdited = task
+                                withAnimation(KidCoinMotion.modal) {
+                                    taskBeingEdited = task
+                                }
                                 editedTitle = task.title
                                 editedPoints = task.points
                                 editedRecurrence = task.recurrence
@@ -166,10 +175,12 @@ struct TasksView: View {
                                     .background(KidCoinTheme.primary.opacity(0.1))
                                     .clipShape(Circle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                             .accessibilityLabel("Edit \(task.title)")
                             Button {
-                                store.deleteTask(task)
+                                withAnimation(KidCoinMotion.list) {
+                                    store.deleteTask(task)
+                                }
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.subheadline.weight(.bold))
@@ -178,13 +189,15 @@ struct TasksView: View {
                                     .background(KidCoinTheme.destructive.opacity(0.1))
                                     .clipShape(Circle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                             .accessibilityLabel("Delete \(task.title)")
                         }
                         .padding(14)
                         .tileCard(cornerRadius: 20)
+                        .transition(.kidCoinRow)
                     }
                 }
+                .animation(KidCoinMotion.list, value: store.state.tasks)
             }
         }
     }
@@ -231,12 +244,11 @@ private struct KidAssignmentPicker: View {
                     .font(.caption)
                     .foregroundStyle(KidCoinTheme.mutedText)
             } else {
-                Picker("Assignment", selection: assignmentScopeBinding) {
-                    ForEach(ChoreAssignmentScope.allCases) { scope in
-                        Text(scope.label).tag(scope)
-                    }
-                }
-                .pickerStyle(.segmented)
+                SegmentedPickerRow(
+                    selection: assignmentScopeBinding,
+                    items: ChoreAssignmentScope.allCases,
+                    label: \.label
+                )
                 .accessibilityLabel("Who can earn this chore")
 
                 Text(scopeHint)
@@ -342,12 +354,11 @@ private struct EditTaskModal: View {
                     CounterControl(value: $points, range: 1...100)
                 }
 
-                Picker("Repeats", selection: $recurrence) {
-                    ForEach(RewardTask.Recurrence.allCases, id: \.self) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
+                SegmentedPickerRow(
+                    selection: $recurrence,
+                    items: RewardTask.Recurrence.allCases,
+                    label: \.label
+                )
 
                 KidAssignmentPicker(kids: kids, selectedKidIDs: $assignedKidIDs)
 
@@ -370,7 +381,7 @@ private struct EditTaskModal: View {
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
             }
             .padding(22)
             .frame(maxWidth: 360)

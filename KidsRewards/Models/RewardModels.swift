@@ -73,15 +73,16 @@ struct RewardTask: Identifiable, Codable, Equatable, Hashable {
         case none
         case daily
         case weekly
+        case biweekly
+        case monthly
 
         var label: String {
             switch self {
-            case .none:
-                return "Off"
-            case .daily:
-                return "Daily"
-            case .weekly:
-                return "Weekly"
+            case .none:     return "Off"
+            case .daily:    return "Daily"
+            case .weekly:   return "Weekly"
+            case .biweekly: return "Biweekly"
+            case .monthly:  return "Monthly"
             }
         }
     }
@@ -137,6 +138,10 @@ struct RewardSettings: Codable, Equatable {
     var allowancePoints: Int
     var allowanceRecurrence: RewardTask.Recurrence
     var lastAllowanceAppliedAt: Date?
+    /// Which day of the week allowance fires (1=Sun…7=Sat). Used for .weekly and .biweekly.
+    var allowanceWeekday: Int?
+    /// Which day of the month allowance fires (1–28). Used for .monthly.
+    var allowanceMonthDay: Int?
     var interestRecurrence: RewardTask.Recurrence
     var lastInterestAppliedAt: Date?
     var notificationsEnabled: Bool
@@ -151,6 +156,8 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints: 5,
         allowanceRecurrence: .none,
         lastAllowanceAppliedAt: nil,
+        allowanceWeekday: nil,
+        allowanceMonthDay: nil,
         interestRecurrence: .none,
         lastInterestAppliedAt: nil,
         notificationsEnabled: true,
@@ -167,6 +174,8 @@ struct RewardSettings: Codable, Equatable {
         case allowancePoints
         case allowanceRecurrence
         case lastAllowanceAppliedAt
+        case allowanceWeekday
+        case allowanceMonthDay
         case interestRecurrence
         case lastInterestAppliedAt
         case notificationsEnabled
@@ -181,6 +190,8 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints: Int = 5,
         allowanceRecurrence: RewardTask.Recurrence = .none,
         lastAllowanceAppliedAt: Date? = nil,
+        allowanceWeekday: Int? = nil,
+        allowanceMonthDay: Int? = nil,
         interestRecurrence: RewardTask.Recurrence = .none,
         lastInterestAppliedAt: Date? = nil,
         notificationsEnabled: Bool = true,
@@ -194,6 +205,8 @@ struct RewardSettings: Codable, Equatable {
         self.allowancePoints = allowancePoints
         self.allowanceRecurrence = allowanceRecurrence
         self.lastAllowanceAppliedAt = lastAllowanceAppliedAt
+        self.allowanceWeekday = allowanceWeekday
+        self.allowanceMonthDay = allowanceMonthDay
         self.interestRecurrence = interestRecurrence
         self.lastInterestAppliedAt = lastInterestAppliedAt
         self.notificationsEnabled = notificationsEnabled
@@ -210,6 +223,8 @@ struct RewardSettings: Codable, Equatable {
         allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints) ?? 5
         allowanceRecurrence = try container.decodeIfPresent(RewardTask.Recurrence.self, forKey: .allowanceRecurrence) ?? .none
         lastAllowanceAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastAllowanceAppliedAt)
+        allowanceWeekday = try container.decodeIfPresent(Int.self, forKey: .allowanceWeekday)
+        allowanceMonthDay = try container.decodeIfPresent(Int.self, forKey: .allowanceMonthDay)
         interestRecurrence = try container.decodeIfPresent(RewardTask.Recurrence.self, forKey: .interestRecurrence) ?? .none
         lastInterestAppliedAt = try container.decodeIfPresent(Date.self, forKey: .lastInterestAppliedAt)
         notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
@@ -226,6 +241,8 @@ struct RewardSettings: Codable, Equatable {
         try container.encode(allowancePoints, forKey: .allowancePoints)
         try container.encode(allowanceRecurrence, forKey: .allowanceRecurrence)
         try container.encodeIfPresent(lastAllowanceAppliedAt, forKey: .lastAllowanceAppliedAt)
+        try container.encodeIfPresent(allowanceWeekday, forKey: .allowanceWeekday)
+        try container.encodeIfPresent(allowanceMonthDay, forKey: .allowanceMonthDay)
         try container.encode(interestRecurrence, forKey: .interestRecurrence)
         try container.encodeIfPresent(lastInterestAppliedAt, forKey: .lastInterestAppliedAt)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
@@ -449,12 +466,75 @@ enum RecurrenceSchedule {
         case .none:
             return true
         case .daily:
-            let lastDay = calendar.startOfDay(for: lastOccurrence)
-            let nowDay = calendar.startOfDay(for: now)
-            return nowDay > lastDay
+            return calendar.startOfDay(for: now) > calendar.startOfDay(for: lastOccurrence)
         case .weekly:
             return startOfWeek(for: now, calendar: calendar) > startOfWeek(for: lastOccurrence, calendar: calendar)
+        case .biweekly:
+            let lastWeekStart = startOfWeek(for: lastOccurrence, calendar: calendar)
+            let nowWeekStart = startOfWeek(for: now, calendar: calendar)
+            let days = calendar.dateComponents([.day], from: lastWeekStart, to: nowWeekStart).day ?? 0
+            return days / 7 >= 2
+        case .monthly:
+            let lastComps = calendar.dateComponents([.year, .month], from: lastOccurrence)
+            let nowComps = calendar.dateComponents([.year, .month], from: now)
+            guard let lastStart = calendar.date(from: lastComps),
+                  let nowStart = calendar.date(from: nowComps) else { return true }
+            return nowStart > lastStart
         }
+    }
+
+    /// Allowance-specific due check that respects weekday (for .weekly/.biweekly) and monthDay (for .monthly).
+    static func allowanceIsDue(
+        since lastApplied: Date?,
+        recurrence: RewardTask.Recurrence,
+        weekday: Int?,
+        monthDay: Int?,
+        now: Date,
+        calendar: Calendar = .current
+    ) -> Bool {
+        let cal = configuredCalendar(from: calendar)
+        guard let last = lastApplied else { return recurrence != .none }
+        switch recurrence {
+        case .none:
+            return true
+        case .daily:
+            return isDue(since: last, recurrence: .daily, now: now, calendar: cal)
+        case .weekly:
+            if let weekday {
+                return weeklyWeekdayIsDue(since: last, weekday: weekday, now: now, calendar: cal)
+            }
+            return isDue(since: last, recurrence: .weekly, now: now, calendar: cal)
+        case .biweekly:
+            if let weekday {
+                return biweeklyWeekdayIsDue(since: last, weekday: weekday, now: now, calendar: cal)
+            }
+            return isDue(since: last, recurrence: .biweekly, now: now, calendar: cal)
+        case .monthly:
+            return monthlyDayIsDue(since: last, day: monthDay ?? 1, now: now, calendar: cal)
+        }
+    }
+
+    private static func weeklyWeekdayIsDue(since lastApplied: Date, weekday: Int, now: Date, calendar: Calendar) -> Bool {
+        guard startOfWeek(for: now, calendar: calendar) > startOfWeek(for: lastApplied, calendar: calendar) else {
+            return false
+        }
+        return calendar.component(.weekday, from: now) >= weekday
+    }
+
+    private static func biweeklyWeekdayIsDue(since lastApplied: Date, weekday: Int, now: Date, calendar: Calendar) -> Bool {
+        let lastWeekStart = startOfWeek(for: lastApplied, calendar: calendar)
+        let nowWeekStart = startOfWeek(for: now, calendar: calendar)
+        let days = calendar.dateComponents([.day], from: lastWeekStart, to: nowWeekStart).day ?? 0
+        guard days / 7 >= 2 else { return false }
+        return calendar.component(.weekday, from: now) >= weekday
+    }
+
+    private static func monthlyDayIsDue(since lastApplied: Date, day: Int, now: Date, calendar: Calendar) -> Bool {
+        guard calendar.component(.day, from: now) >= day else { return false }
+        var targetComps = calendar.dateComponents([.year, .month], from: now)
+        targetComps.day = day
+        guard let targetDate = calendar.date(from: targetComps) else { return true }
+        return lastApplied < targetDate
     }
 
     static func startOfWeek(for date: Date, calendar: Calendar = .current) -> Date {
@@ -475,6 +555,17 @@ enum RecurrenceSchedule {
             let anchor = lastOccurrence ?? now
             let nextWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
             return max(nextWeek, now)
+        case .biweekly:
+            let anchor = lastOccurrence ?? now
+            let nextBiweek = calendar.date(byAdding: .weekOfYear, value: 2, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
+            return max(nextBiweek, now)
+        case .monthly:
+            let anchor = lastOccurrence ?? now
+            var comps = calendar.dateComponents([.year, .month], from: anchor)
+            comps.month = (comps.month ?? 1) + 1
+            comps.day = 1
+            let nextMonth = calendar.date(from: comps) ?? anchor
+            return max(nextMonth, now)
         }
     }
 
