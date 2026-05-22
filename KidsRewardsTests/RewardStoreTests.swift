@@ -713,8 +713,8 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.kids[0].availablePoints, 0)
     }
 
-    func testSavingsGoalProgressIncludesAvailableAndVault() {
-        let kid = Kid(name: "Avery", availablePoints: 7, vaultPoints: 5, savingsGoal: SavingsGoal(title: "Bike", targetPoints: 20))
+    func testSavingsGoalProgressReflectsGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 7, vaultPoints: 5, goalPoints: 12, savingsGoal: SavingsGoal(title: "Bike", targetPoints: 20))
         let store = makeStore(kids: [kid])
 
         XCTAssertEqual(store.savingsGoalProgress(for: kid), 12)
@@ -723,8 +723,9 @@ final class RewardStoreTests: XCTestCase {
     func testSavingsGoalProgressCapsAtTarget() {
         let kid = Kid(
             name: "Avery",
-            availablePoints: 30,
-            vaultPoints: 10,
+            availablePoints: 0,
+            vaultPoints: 0,
+            goalPoints: 30,
             savingsGoal: SavingsGoal(title: "Bike", targetPoints: 20)
         )
         let store = makeStore(kids: [kid])
@@ -797,19 +798,21 @@ final class RewardStoreTests: XCTestCase {
     }
 
     func testIsAllowanceScheduleDueWhenRecurrenceEnabledAndNeverApplied() {
-        let settings = RewardSettings(
+        let anchor = Date(timeIntervalSince1970: 4_102_444_800) // year 2100
+        var settings = RewardSettings(
             currencyCode: "USD",
             currencyPerPoint: 1,
             vaultInterestRate: 0.05,
             allowancePoints: 5,
             allowanceRecurrence: .weekly
         )
+        settings.lastAllowanceAppliedAt = anchor
         let store = makeStore(
             kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)],
             settings: settings
         )
 
-        XCTAssertTrue(store.isAllowanceScheduleDue())
+        XCTAssertTrue(store.isAllowanceScheduleDue(now: anchor.addingTimeInterval(8 * 24 * 3600)))
     }
 
     func testEarnedPointsThisWeekSumsEarnedTransactions() {
@@ -1693,8 +1696,15 @@ final class RewardStoreTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
-        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
-        let nextWeek = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: anchor))
+        // Jan 5, 2100 = Sunday (firstWeekday=1), anchor at noon
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 5, hour: 12)))
+        // Next occurrence is the START of the following week (Jan 12 00:00 UTC), not anchor+7d
+        let nextWeekStart = try XCTUnwrap(
+            calendar.date(
+                byAdding: .weekOfYear, value: 1,
+                to: try XCTUnwrap(calendar.dateInterval(of: .weekOfYear, for: anchor)?.start)
+            )
+        )
 
         let delay = RewardNotifications.recurringDelay(
             recurrence: .weekly,
@@ -1703,7 +1713,7 @@ final class RewardStoreTests: XCTestCase {
             calendar: calendar
         )
 
-        XCTAssertEqual(delay, nextWeek.timeIntervalSince(anchor))
+        XCTAssertEqual(delay, nextWeekStart.timeIntervalSince(anchor))
     }
 
     func testSetNotificationsEnabledPersistsInSettings() {
@@ -2519,14 +2529,16 @@ final class RewardStoreTests: XCTestCase {
     // MARK: - Interest schedule
 
     func testIsInterestScheduleDueWhenNeverApplied() {
+        let anchor = Date(timeIntervalSince1970: 4_102_444_800) // year 2100
         var settings = RewardSettings.defaults
         settings.interestRecurrence = .daily
+        settings.lastInterestAppliedAt = anchor
         let store = makeStore(
             kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)],
             settings: settings
         )
 
-        XCTAssertTrue(store.isInterestScheduleDue())
+        XCTAssertTrue(store.isInterestScheduleDue(now: anchor.addingTimeInterval(25 * 3600)))
     }
 
     func testIsInterestScheduleDueRespectsDueDate() throws {
@@ -2854,6 +2866,490 @@ final class RewardStoreTests: XCTestCase {
         store.applyAllowanceToAllKids(at: Date())
 
         XCTAssertNil(store.state.settings.lastAllowanceAppliedAt)
+    }
+
+    // MARK: - Kid.goalPoints model
+
+    func testKidGoalPointsDefaultsToZeroOnDecode() throws {
+        let json = """
+        {
+          "id": "\(UUID().uuidString)",
+          "name": "Avery",
+          "availablePoints": 5,
+          "vaultPoints": 3
+        }
+        """
+        let kid = try JSONDecoder.configuredForTests.decode(Kid.self, from: Data(json.utf8))
+
+        XCTAssertEqual(kid.goalPoints, 0)
+    }
+
+    func testKidGoalPointsRoundTrips() throws {
+        let original = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 17)
+        let data = try JSONEncoder.configuredForTests.encode(original)
+        let decoded = try JSONDecoder.configuredForTests.decode(Kid.self, from: data)
+
+        XCTAssertEqual(decoded.goalPoints, 17)
+    }
+
+    func testKidTotalPointsIncludesGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 4, vaultPoints: 6, goalPoints: 10)
+
+        XCTAssertEqual(kid.totalPoints, 20)
+    }
+
+    func testSavingsGoalProgressWithZeroGoalPointsIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 50, vaultPoints: 50, goalPoints: 0, savingsGoal: SavingsGoal(title: "Bike", targetPoints: 20))
+        let store = makeStore(kids: [kid])
+
+        XCTAssertEqual(store.savingsGoalProgress(for: kid), 0)
+    }
+
+    // MARK: - depositToGoal
+
+    func testDepositToGoalMovesPointsFromAvailableToGoal() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        let result = store.depositToGoal(points: 4, for: store.state.kids[0])
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 6)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 4)
+    }
+
+    func testDepositToGoalCreatesGoalDepositedTransaction() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.depositToGoal(points: 4, for: store.state.kids[0])
+
+        let tx = store.transactions(for: store.state.kids[0]).first
+        XCTAssertEqual(tx?.kind, .goalDeposited)
+        XCTAssertEqual(tx?.points, 4)
+    }
+
+    func testDepositToGoalCapsAtAvailablePoints() {
+        let kid = Kid(name: "Avery", availablePoints: 3, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.depositToGoal(points: 100, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
+    }
+
+    func testDepositToGoalReturnsFalseWhenAvailableIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        let result = store.depositToGoal(points: 5, for: store.state.kids[0])
+
+        XCTAssertFalse(result)
+        XCTAssertTrue(store.state.transactions.isEmpty)
+    }
+
+    // MARK: - cashOutFromGoal
+
+    func testCashOutFromGoalReducesGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        let store = makeStore(kids: [kid])
+
+        let result = store.cashOutFromGoal(points: 4, for: store.state.kids[0])
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 6)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+    }
+
+    func testCashOutFromGoalCreatesGoalCashedOutTransaction() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 2, vaultInterestRate: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.cashOutFromGoal(points: 4, for: store.state.kids[0])
+
+        let tx = store.transactions(for: store.state.kids[0]).first
+        XCTAssertEqual(tx?.kind, .goalCashedOut)
+        XCTAssertEqual(tx?.points, 4)
+        XCTAssertEqual(tx?.currencyAmount, 8)
+    }
+
+    func testCashOutFromGoalCapsAtGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 3)
+        let store = makeStore(kids: [kid])
+
+        store.cashOutFromGoal(points: 100, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.points, 3)
+    }
+
+    func testCashOutFromGoalReturnsFalseWhenGoalIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        let result = store.cashOutFromGoal(points: 5, for: store.state.kids[0])
+
+        XCTAssertFalse(result)
+        XCTAssertTrue(store.state.transactions.isEmpty)
+    }
+
+    // MARK: - withdrawFromGoal
+
+    func testWithdrawFromGoalMovesPointsToAvailable() {
+        let kid = Kid(name: "Avery", availablePoints: 2, vaultPoints: 0, goalPoints: 8)
+        let store = makeStore(kids: [kid])
+
+        store.withdrawFromGoal(points: 5, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 7)
+    }
+
+    func testWithdrawFromGoalCreatesGoalWithdrawnTransaction() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 8)
+        let store = makeStore(kids: [kid])
+
+        store.withdrawFromGoal(points: 5, for: store.state.kids[0])
+
+        let tx = store.transactions(for: store.state.kids[0]).first
+        XCTAssertEqual(tx?.kind, .goalWithdrawn)
+        XCTAssertEqual(tx?.points, 5)
+    }
+
+    func testWithdrawFromGoalCapsAtGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 3)
+        let store = makeStore(kids: [kid])
+
+        store.withdrawFromGoal(points: 100, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 3)
+    }
+
+    func testWithdrawFromGoalNoOpWhenGoalIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.withdrawFromGoal(points: 3, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.transactions.isEmpty)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+    }
+
+    // MARK: - Goal interest
+
+    func testGoalInterestPointsCalculatesFromGoalBalance() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 100)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertEqual(store.goalInterestPoints(for: store.state.kids[0]), 5)
+    }
+
+    func testGoalInterestPointsZeroWhenGoalEmpty() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 0)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.10)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertEqual(store.goalInterestPoints(for: store.state.kids[0]), 0)
+    }
+
+    func testTotalInterestPointsSumsVaultAndGoal() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100, goalPoints: 200)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        // vault: 100 * 0.05 = 5, goal: 200 * 0.05 = 10, total = 15
+        XCTAssertEqual(store.totalInterestPoints(for: store.state.kids[0]), 15)
+    }
+
+    func testApplyInterestAppliesBothVaultAndGoalInterest() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100, goalPoints: 200)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        let result = store.applyInterest(to: store.state.kids[0])
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 105)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 210)
+    }
+
+    func testApplyInterestCreatesInterestAndGoalInterestTransactions() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100, goalPoints: 200)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.05)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.applyInterest(to: store.state.kids[0])
+
+        let txKinds = store.transactions(for: store.state.kids[0]).map { $0.kind }
+        XCTAssertTrue(txKinds.contains(.interest))
+        XCTAssertTrue(txKinds.contains(.goalInterest))
+        XCTAssertEqual(txKinds.count, 2)
+    }
+
+    func testApplyInterestReturnsFalseWhenBothBalancesZero() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 0, goalPoints: 0)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.10)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        let result = store.applyInterest(to: store.state.kids[0])
+
+        XCTAssertFalse(result)
+        XCTAssertTrue(store.state.transactions.isEmpty)
+    }
+
+    func testApplyInterestOnlyVaultWhenGoalIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100, goalPoints: 0)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 1, vaultInterestRate: 0.10)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.applyInterest(to: store.state.kids[0])
+
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 110)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+        XCTAssertEqual(store.state.transactions.count, 1)
+        XCTAssertEqual(store.state.transactions[0].kind, .interest)
+    }
+
+    func testApplyDueInterestIncludesGoalInterest() {
+        let start = Date(timeIntervalSince1970: 4_102_444_800)
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 100, goalPoints: 200)
+        let settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            interestRecurrence: .daily,
+            lastInterestAppliedAt: start
+        )
+        let store = RewardStore(
+            initialState: RewardState(kids: [kid], tasks: [], settings: settings, transactions: []),
+            fileURL: temporaryStateURL()
+        )
+
+        XCTAssertTrue(store.applyDueInterestIfNeeded(now: start.addingTimeInterval(25 * 60 * 60)))
+
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 105)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 210)
+    }
+
+    func testIsInterestScheduleDueReturnsTrueWhenGoalHasInterestButVaultEmpty() {
+        let anchor = Date(timeIntervalSince1970: 4_102_444_800) // year 2100
+        var settings = RewardSettings.defaults
+        settings.interestRecurrence = .daily
+        settings.vaultInterestRate = 0.10
+        settings.lastInterestAppliedAt = anchor
+        let store = makeStore(
+            kids: [Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 100)],
+            settings: settings
+        )
+
+        XCTAssertTrue(store.isInterestScheduleDue(now: anchor.addingTimeInterval(25 * 3600)))
+    }
+
+    // MARK: - Goal approval flow
+
+    func testRequestGoalDepositCreatesApprovalRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalDeposit(points: 4, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.approvalRequests[0].kind, .goalDeposit)
+        XCTAssertEqual(store.state.approvalRequests[0].points, 4)
+    }
+
+    func testRequestGoalDepositIgnoredWhenAvailableIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalDeposit(points: 5, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testApproveGoalDepositMovesPointsToGoal() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalDeposit(points: 4, for: store.state.kids[0])
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 6)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 4)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.kind, .goalDeposited)
+    }
+
+    func testRequestGoalCashOutCreatesApprovalRequest() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalCashOut(points: 4, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.approvalRequests[0].kind, .goalCashOut)
+        XCTAssertEqual(store.state.approvalRequests[0].points, 4)
+    }
+
+    func testRequestGoalCashOutIgnoredWhenGoalIsZero() {
+        let kid = Kid(name: "Avery", availablePoints: 5, vaultPoints: 0, goalPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalCashOut(points: 3, for: store.state.kids[0])
+
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+    }
+
+    func testApproveGoalCashOutDeductsGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestGoalCashOut(points: 4, for: store.state.kids[0])
+        XCTAssertTrue(store.approveRequest(store.state.approvalRequests[0]))
+
+        XCTAssertEqual(store.state.kids[0].goalPoints, 6)
+        XCTAssertTrue(store.state.approvalRequests.isEmpty)
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).first?.kind, .goalCashedOut)
+    }
+
+    func testDepositToGoalRoutesViaApprovalWhenEnabled() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.depositToGoal(points: 5, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.approvalRequests[0].kind, .goalDeposit)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0, "Goal unchanged before approval")
+    }
+
+    func testCashOutFromGoalRoutesViaApprovalWhenEnabled() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.cashOutFromGoal(points: 5, for: store.state.kids[0])
+
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+        XCTAssertEqual(store.state.approvalRequests[0].kind, .goalCashOut)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 10, "Goal unchanged before approval")
+    }
+
+    // MARK: - setVaultInterestRate / setDefaultAllowancePoints
+
+    func testSetVaultInterestRatePersistsInSettings() {
+        let store = makeStore(kids: [])
+
+        store.setVaultInterestRate(Decimal(string: "0.07")!)
+
+        assertDecimalEqual(store.state.settings.vaultInterestRate, Decimal(string: "0.07")!)
+    }
+
+    func testSetVaultInterestRateClampsNegativeToZero() {
+        let store = makeStore(kids: [])
+
+        store.setVaultInterestRate(Decimal(string: "-0.05")!)
+
+        assertDecimalEqual(store.state.settings.vaultInterestRate, 0)
+    }
+
+    func testSetDefaultAllowancePointsPersistsInSettings() {
+        let store = makeStore(kids: [])
+
+        store.setDefaultAllowancePoints(12)
+
+        XCTAssertEqual(store.state.settings.allowancePoints, 12)
+    }
+
+    func testSetDefaultAllowancePointsClampsNegativeToZero() {
+        let store = makeStore(kids: [])
+
+        store.setDefaultAllowancePoints(-5)
+
+        XCTAssertEqual(store.state.settings.allowancePoints, 0)
+    }
+
+    // MARK: - totalHouseholdPoints includes goal
+
+    func testTotalHouseholdPointsIncludesGoalPoints() {
+        let store = makeStore(kids: [
+            Kid(name: "Avery", availablePoints: 10, vaultPoints: 5, goalPoints: 8),
+            Kid(name: "Blake", availablePoints: 3, vaultPoints: 2, goalPoints: 7)
+        ])
+
+        XCTAssertEqual(store.totalHouseholdPoints, 35)
+    }
+
+    func testTotalGoalPoints() {
+        let store = makeStore(kids: [
+            Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 6),
+            Kid(name: "Blake", availablePoints: 0, vaultPoints: 0, goalPoints: 4)
+        ])
+
+        XCTAssertEqual(store.totalGoalPoints, 10)
+    }
+
+    // MARK: - Goal transaction display labels
+
+    func testTransactionPointsDisplayLabelGoalKinds() {
+        let kidID = UUID()
+        func makeTransaction(kind: RewardTransaction.Kind, points: Int) -> RewardTransaction {
+            RewardTransaction(kidID: kidID, kind: kind, points: points, note: "", date: Date(), currencyAmount: nil)
+        }
+
+        XCTAssertEqual(makeTransaction(kind: .goalDeposited, points: 5).pointsDisplayLabel, "moved 5")
+        XCTAssertEqual(makeTransaction(kind: .goalWithdrawn, points: 3).pointsDisplayLabel, "+3")
+        XCTAssertEqual(makeTransaction(kind: .goalCashedOut, points: 4).pointsDisplayLabel, "-4")
+        XCTAssertEqual(makeTransaction(kind: .goalInterest, points: 2).pointsDisplayLabel, "+2")
+    }
+
+    // MARK: - Goal transaction correction/deletion
+
+    func testDeleteGoalDepositTransactionReversesGoalPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0, goalPoints: 0)
+        let store = makeStore(kids: [kid])
+
+        store.depositToGoal(points: 4, for: store.state.kids[0])
+        let tx = store.state.transactions[0]
+
+        let didDelete = store.deleteTransaction(tx)
+
+        XCTAssertTrue(didDelete)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 10)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+    }
+
+    func testDeleteGoalWithdrawalTransactionReversesPoints() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 8)
+        let store = makeStore(kids: [kid])
+
+        store.withdrawFromGoal(points: 5, for: store.state.kids[0])
+        let tx = store.state.transactions[0]
+
+        let didDelete = store.deleteTransaction(tx)
+
+        XCTAssertTrue(didDelete)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 8)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
     }
 
     private func makeStore(

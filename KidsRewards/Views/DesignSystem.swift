@@ -632,24 +632,30 @@ struct EmptyStatePanel: View {
 enum TransactionPillStyle {
     static func background(for kind: RewardTransaction.Kind) -> Color {
         switch kind {
-        case .cashedOut:
+        case .cashedOut, .goalCashedOut:
             return KidCoinTheme.destructive.opacity(0.12)
         case .deposited:
             return KidCoinTheme.mint.opacity(0.25)
+        case .goalDeposited:
+            return KidCoinTheme.primary.opacity(0.12)
         case .withdrawn:
             return KidCoinTheme.primary.opacity(0.2)
-        case .earned, .interest, .adjusted:
+        case .goalWithdrawn:
+            return KidCoinTheme.primary.opacity(0.15)
+        case .earned, .interest, .adjusted, .goalInterest:
             return KidCoinTheme.primary.opacity(0.12)
         }
     }
 
     static func foreground(for kind: RewardTransaction.Kind) -> Color {
         switch kind {
-        case .cashedOut:
+        case .cashedOut, .goalCashedOut:
             return KidCoinTheme.destructive
         case .deposited:
             return KidCoinTheme.mintText
-        case .withdrawn:
+        case .goalDeposited, .goalInterest:
+            return KidCoinTheme.primary
+        case .withdrawn, .goalWithdrawn:
             return KidCoinTheme.primary
         case .earned, .interest, .adjusted:
             return KidCoinTheme.primary

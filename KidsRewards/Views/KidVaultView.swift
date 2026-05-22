@@ -10,10 +10,16 @@ struct KidVaultView: View {
 
     @State private var depositPoints = 1
     @State private var withdrawPoints = 1
+    @State private var goalDepositPoints = 1
+    @State private var goalWithdrawPoints = 1
+    @State private var goalCashOutPoints = 1
     @State private var goalTitle = ""
     @State private var goalTargetPoints = 25
+    @State private var interestRateText = ""
+    @State private var interestRecurrence: RewardTask.Recurrence = .none
     @State private var showingInterestConfirmation = false
     @State private var showingWithdrawConfirmation = false
+    @State private var showingGoalCashOutConfirmation = false
 
     private var kid: Kid? {
         store.kid(withID: kidID)
@@ -25,8 +31,10 @@ struct KidVaultView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         vaultSummary(for: kid)
-                        savingsGoalSection(for: kid)
+                        vaultSettingsSection()
                         vaultActionsSection(for: kid)
+                        goalSection(for: kid)
+                        savingsGoalSection(for: kid)
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
@@ -38,6 +46,7 @@ struct KidVaultView: View {
                 .tint(KidCoinTheme.primary)
                 .onAppear {
                     syncGoalFields(from: kid)
+                    loadVaultSettings()
                 }
                 .onChange(of: kid.savingsGoal) { _, _ in
                     syncGoalFields(from: kid)
@@ -69,6 +78,21 @@ struct KidVaultView: View {
                 } message: {
                     Text(withdrawDialogMessage(for: kid))
                 }
+                .confirmationDialog(
+                    "Cash Out from Goal?",
+                    isPresented: $showingGoalCashOutConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Cash Out \(goalCashOutPoints) \(goalCashOutPoints == 1 ? "Point" : "Points")", role: .destructive) {
+                        withAnimation(KidCoinMotion.list) {
+                            store.cashOutFromGoal(points: goalCashOutPoints, for: kid)
+                        }
+                        goalCashOutPoints = 1
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text(goalCashOutDialogMessage(for: kid))
+                }
             } else {
                 ContentUnavailableView("Kid Not Found", systemImage: "person.crop.circle.badge.questionmark")
                     .kidCoinBackground()
@@ -84,7 +108,12 @@ struct KidVaultView: View {
                 .textCase(.uppercase)
                 .tracking(1.2)
 
-            MetricTile(title: "Vault", value: kid.vaultPoints, systemImage: "lock.fill", tone: .mint)
+            HStack(spacing: 12) {
+                MetricTile(title: "Vault", value: kid.vaultPoints, systemImage: "lock.fill", tone: .mint)
+                if kid.goalPoints > 0 || kid.savingsGoal != nil {
+                    MetricTile(title: "Goal", value: kid.goalPoints, systemImage: "target", tone: .coral)
+                }
+            }
 
             Text("Vault value: \(Formatters.currency(store.currencyValue(for: kid.vaultPoints), code: store.state.settings.currencyCode))")
                 .font(.subheadline)
@@ -211,12 +240,150 @@ struct KidVaultView: View {
                         .foregroundStyle(KidCoinTheme.mutedText)
                 } else {
                     PillButton(
-                        title: "Apply \(Formatters.percent(store.state.settings.vaultInterestRate)) Interest",
+                        title: "Apply \(Formatters.percent(store.state.settings.vaultInterestRate)) Vault Interest",
                         systemImage: "percent",
                         tone: .subtle,
                         disabled: store.interestPoints(for: kid) == 0
                     ) {
                         showingInterestConfirmation = true
+                    }
+                }
+            }
+            .padding(18)
+            .tileCard(cornerRadius: 26)
+        }
+    }
+
+    private func vaultSettingsSection() -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel(title: "Interest Settings")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Interest rate")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Decimal — 0.05 means 5%. Applies to vault and goal.")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                    }
+                    Spacer()
+                    TextField("0.05", text: $interestRateText)
+                        .kidCoinDecimalEntry()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 86)
+                        .fieldPill()
+                }
+
+                SegmentedPickerRow(
+                    selection: $interestRecurrence,
+                    items: RewardTask.Recurrence.allCases,
+                    label: \.label
+                )
+                .onChange(of: interestRecurrence) { _, newValue in
+                    store.setInterestRecurrence(newValue)
+                }
+
+                Text(interestScheduleText)
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .lineSpacing(2)
+
+                PillButton(title: "Save Interest Settings", systemImage: "checkmark", tone: .subtle) {
+                    saveVaultSettings()
+                }
+            }
+            .padding(18)
+            .tileCard(cornerRadius: 26)
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: interestRecurrence)
+    }
+
+    private func goalSection(for kid: Kid) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel(title: "Goal Balance")
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Goal")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                        Text("Can be cashed out at any time")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                    }
+                    Spacer()
+                    Text("\(kid.goalPoints) pts")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(KidCoinTheme.primary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText(value: Double(kid.goalPoints)))
+                        .animation(KidCoinMotion.gentle, value: kid.goalPoints)
+                }
+
+                HStack {
+                    Text("Deposit from available")
+                        .font(.subheadline)
+                    Spacer()
+                    CounterControl(value: $goalDepositPoints, range: 1...max(kid.availablePoints, 1))
+                }
+                PillButton(
+                    title: goalDepositPending(for: kid) ? "Deposit pending approval" : "Deposit \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points")",
+                    systemImage: "arrow.down.to.line",
+                    tone: .primary,
+                    disabled: kid.availablePoints == 0 || goalDepositPending(for: kid)
+                ) {
+                    withAnimation(KidCoinMotion.list) {
+                        store.depositToGoal(points: goalDepositPoints, for: kid)
+                    }
+                    goalDepositPoints = 1
+                }
+
+                Divider().overlay(KidCoinTheme.border)
+
+                HStack {
+                    Text("Cash out from goal")
+                        .font(.subheadline)
+                    Spacer()
+                    CounterControl(value: $goalCashOutPoints, range: 1...max(kid.goalPoints, 1))
+                }
+                PillButton(
+                    title: goalCashOutPending(for: kid) ? "Cash out pending approval" : "Cash out \(goalCashOutPoints) \(goalCashOutPoints == 1 ? "point" : "points")",
+                    systemImage: "banknote",
+                    tone: .subtle,
+                    disabled: kid.goalPoints == 0 || goalCashOutPending(for: kid)
+                ) {
+                    showingGoalCashOutConfirmation = true
+                }
+
+                HStack {
+                    Text("Withdraw to available")
+                        .font(.subheadline)
+                    Spacer()
+                    CounterControl(value: $goalWithdrawPoints, range: 1...max(kid.goalPoints, 1))
+                }
+                PillButton(
+                    title: "Withdraw \(goalWithdrawPoints) \(goalWithdrawPoints == 1 ? "point" : "points")",
+                    systemImage: "arrow.up.to.line",
+                    tone: .subtle,
+                    disabled: kid.goalPoints == 0
+                ) {
+                    withAnimation(KidCoinMotion.list) {
+                        store.withdrawFromGoal(points: goalWithdrawPoints, for: kid)
+                    }
+                    goalWithdrawPoints = 1
+                }
+
+                if store.state.settings.interestRecurrence == .none {
+                    let goalInterestAmt = store.goalInterestPoints(for: kid)
+                    PillButton(
+                        title: "Apply \(Formatters.percent(store.state.settings.vaultInterestRate)) Goal Interest",
+                        systemImage: "percent",
+                        tone: .subtle,
+                        disabled: goalInterestAmt == 0
+                    ) {
+                        withAnimation(KidCoinMotion.list) {
+                            _ = store.applyInterest(to: kid)
+                        }
                     }
                 }
             }
@@ -232,8 +399,46 @@ struct KidVaultView: View {
         }
     }
 
+    private func loadVaultSettings() {
+        interestRateText = Formatters.decimalInput(store.state.settings.vaultInterestRate)
+        interestRecurrence = store.state.settings.interestRecurrence
+    }
+
+    private func saveVaultSettings() {
+        if let rate = Formatters.parseDecimal(interestRateText) {
+            store.setVaultInterestRate(rate)
+        }
+    }
+
+    private var interestScheduleText: String {
+        switch interestRecurrence {
+        case .none:
+            return "Interest is applied manually using the button below."
+        case .daily, .weekly, .biweekly, .monthly:
+            let cadence = interestRecurrence.label.lowercased()
+            if let last = store.state.settings.lastInterestAppliedAt {
+                return "Interest runs \(cadence). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Interest runs \(cadence) the next time the app opens."
+        }
+    }
+
+    private func goalDepositPending(for kid: Kid) -> Bool {
+        store.pendingApprovalRequest(kind: .goalDeposit, kidID: kid.id) != nil
+    }
+
+    private func goalCashOutPending(for kid: Kid) -> Bool {
+        store.pendingApprovalRequest(kind: .goalCashOut, kidID: kid.id) != nil
+    }
+
+    private func goalCashOutDialogMessage(for kid: Kid) -> String {
+        let amount = min(goalCashOutPoints, kid.goalPoints)
+        let value = Formatters.currency(store.currencyValue(for: amount), code: store.state.settings.currencyCode)
+        return "This cashes out \(amount) goal points (\(value)) for \(kid.name). Goal points are removed permanently."
+    }
+
     private var interestDialogTitle: String {
-        store.state.settings.approvalFlowEnabled ? "Request Interest?" : "Apply Vault Interest?"
+        store.state.settings.approvalFlowEnabled ? "Request Interest?" : "Apply Interest?"
     }
 
     private var interestConfirmTitle: String {
@@ -241,11 +446,16 @@ struct KidVaultView: View {
     }
 
     private func interestDialogMessage(for kid: Kid) -> String {
-        let points = store.interestPoints(for: kid)
+        let vaultPts = store.interestPoints(for: kid)
+        let goalPts = store.goalInterestPoints(for: kid)
+        var parts: [String] = []
+        if vaultPts > 0 { parts.append("\(vaultPts) to vault") }
+        if goalPts > 0 { parts.append("\(goalPts) to goal") }
+        let summary = parts.isEmpty ? "0 points" : parts.joined(separator: ", ")
         if store.state.settings.approvalFlowEnabled {
-            return "This creates a pending parent approval for \(points) vault interest points."
+            return "This creates a pending parent approval for interest: \(summary)."
         }
-        return "This adds \(points) points to \(kid.name)'s vault."
+        return "This adds interest to \(kid.name): \(summary)."
     }
 
     private func applyInterest(for kid: Kid) {

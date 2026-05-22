@@ -7,13 +7,8 @@ struct SettingsView: View {
 
     @State private var currencyCode = ""
     @State private var pointsPerDollarText = ""
-    @State private var interestRateText = ""
     @State private var parentPINText = ""
     @State private var approvalFlowEnabled = false
-    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
-    @State private var allowanceWeekday: Int = 1
-    @State private var allowanceMonthDay: Int = 1
-    @State private var interestRecurrence: RewardTask.Recurrence = .none
     @State private var notificationsEnabled = true
     @State private var iCloudAutoSyncEnabled = false
     @State private var saved = false
@@ -51,89 +46,6 @@ struct SettingsView: View {
                             .frame(width: 102)
                             .fieldPill()
                     }
-                }
-
-                SectionCard(title: "Allowance") {
-                    SettingsField(label: "Schedule", hint: "Runs automatically when the app opens on the due day") {
-                        Picker("", selection: $allowanceRecurrence) {
-                            ForEach(RewardTask.Recurrence.allCases, id: \.self) {
-                                Text($0.label).tag($0)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(KidCoinTheme.primary)
-                        .onChange(of: allowanceRecurrence) { _, newValue in
-                            store.setAllowanceRecurrence(newValue)
-                        }
-                    }
-
-                    if allowanceRecurrence == .weekly || allowanceRecurrence == .biweekly {
-                        SettingsField(label: "Day of week", hint: "Allowance fires on or after this day each cycle") {
-                            Picker("", selection: $allowanceWeekday) {
-                                ForEach(1...7, id: \.self) { day in
-                                    Text(weekdayName(day)).tag(day)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .tint(KidCoinTheme.primary)
-                            .onChange(of: allowanceWeekday) { _, newValue in
-                                store.setAllowanceWeekday(newValue)
-                            }
-                        }
-                    }
-
-                    if allowanceRecurrence == .monthly {
-                        SettingsField(label: "Day of month", hint: "Allowance fires on or after this day each month") {
-                            CounterControl(value: $allowanceMonthDay, range: 1...28)
-                                .onChange(of: allowanceMonthDay) { _, newValue in
-                                    store.setAllowanceMonthDay(newValue)
-                                }
-                        }
-                    }
-
-                    Text(allowanceScheduleText)
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .lineSpacing(2)
-                }
-                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: allowanceRecurrence)
-
-                SectionCard(title: "Vault") {
-                    SettingsField(label: "Interest rate", hint: "Decimal, 0.05 means 5%") {
-                        TextField("0.05", text: $interestRateText)
-                            .kidCoinDecimalEntry()
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 102)
-                            .fieldPill()
-                    }
-
-                    HStack {
-                        Text("Current interest")
-                            .font(.subheadline)
-                            .foregroundStyle(KidCoinTheme.mutedText)
-                        Spacer()
-                        Text(currentInterestLabel)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(KidCoinTheme.mintText)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(KidCoinTheme.mint.opacity(0.28))
-                            .clipShape(Capsule())
-                    }
-
-                    SegmentedPickerRow(
-                        selection: $interestRecurrence,
-                        items: RewardTask.Recurrence.allCases,
-                        label: \.label
-                    )
-                    .onChange(of: interestRecurrence) { _, newValue in
-                        store.setInterestRecurrence(newValue)
-                    }
-
-                    Text(interestScheduleText)
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .lineSpacing(2)
                 }
 
                 SectionCard(title: ICloudBackup.isAvailable ? "Reminders & Sync" : "Reminders") {
@@ -406,71 +318,6 @@ struct SettingsView: View {
         return "Free build: data stays on this device. Export JSON to Files or AirDrop to copy to another phone—no subscription or paid Apple developer account required."
     }
 
-    private var interestScheduleText: String {
-        switch interestRecurrence {
-        case .none:
-            return "Interest is applied manually from each kid's vault screen."
-        case .daily, .weekly, .biweekly, .monthly:
-            let cadence = interestRecurrence.label.lowercased()
-            if let lastApplied = store.state.settings.lastInterestAppliedAt {
-                return "Interest runs \(cadence). Last applied \(lastApplied.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Interest runs \(cadence) the next time the app opens."
-        }
-    }
-
-    private var allowanceScheduleText: String {
-        switch allowanceRecurrence {
-        case .none:
-            return "Allowance is applied manually from each kid's detail screen."
-        case .daily:
-            if let last = store.state.settings.lastAllowanceAppliedAt {
-                return "Runs daily. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Runs daily when the app opens."
-        case .weekly:
-            let day = weekdayName(allowanceWeekday)
-            if let last = store.state.settings.lastAllowanceAppliedAt {
-                return "Runs every \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Runs every \(day) when the app opens."
-        case .biweekly:
-            let day = weekdayName(allowanceWeekday)
-            if let last = store.state.settings.lastAllowanceAppliedAt {
-                return "Runs every other \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Runs every other \(day) when the app opens."
-        case .monthly:
-            let suffix = ordinalSuffix(for: allowanceMonthDay)
-            if let last = store.state.settings.lastAllowanceAppliedAt {
-                return "Runs on the \(allowanceMonthDay)\(suffix) of each month. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
-            }
-            return "Runs on the \(allowanceMonthDay)\(suffix) of each month when the app opens."
-        }
-    }
-
-    private func weekdayName(_ weekday: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        guard weekday >= 1, weekday <= 7 else { return "" }
-        return formatter.weekdaySymbols[weekday - 1]
-    }
-
-    private func ordinalSuffix(for day: Int) -> String {
-        switch day {
-        case 11, 12, 13: return "th"
-        case _ where day % 10 == 1: return "st"
-        case _ where day % 10 == 2: return "nd"
-        case _ where day % 10 == 3: return "rd"
-        default: return "th"
-        }
-    }
-
-    private var currentInterestLabel: String {
-        let rate = Decimal(string: interestRateText) ?? store.state.settings.vaultInterestRate
-        return Formatters.percent(rate)
-    }
-
     private var pinButtonTitle: String {
         if pinSaved { return "PIN Saved" }
         if parentPINText.isEmpty {
@@ -506,13 +353,8 @@ struct SettingsView: View {
         } else {
             pointsPerDollarText = ""
         }
-        interestRateText = Formatters.decimalInput(store.state.settings.vaultInterestRate)
         parentPINText = ""
         approvalFlowEnabled = store.state.settings.approvalFlowEnabled
-        allowanceRecurrence = store.state.settings.allowanceRecurrence
-        allowanceWeekday = store.state.settings.allowanceWeekday ?? 1
-        allowanceMonthDay = store.state.settings.allowanceMonthDay ?? 1
-        interestRecurrence = store.state.settings.interestRecurrence
         notificationsEnabled = store.state.settings.notificationsEnabled
         iCloudAutoSyncEnabled = store.state.settings.iCloudAutoSyncEnabled
     }
@@ -521,7 +363,7 @@ struct SettingsView: View {
         store.updateSettings(
             currencyCode: currencyCode,
             currencyPerPoint: currencyPerPointFromPointsField() ?? store.state.settings.currencyPerPoint,
-            vaultInterestRate: Formatters.parseDecimal(interestRateText) ?? store.state.settings.vaultInterestRate
+            vaultInterestRate: store.state.settings.vaultInterestRate
         )
         loadSettings()
         saved = true
@@ -668,6 +510,10 @@ private struct ApprovalRequestRow: View {
             return "\(request.points) points to vault"
         case .allowance:
             return "\(request.points) allowance points"
+        case .goalDeposit:
+            return "\(request.points) points to goal"
+        case .goalCashOut:
+            return "\(request.points) points from goal · \(Formatters.currency(currencyValue, code: currencyCode))"
         }
     }
 }
@@ -685,6 +531,10 @@ private extension ApprovalRequest.Kind {
             return "Vault deposit"
         case .allowance:
             return "Allowance"
+        case .goalDeposit:
+            return "Goal deposit"
+        case .goalCashOut:
+            return "Goal cash out"
         }
     }
 
@@ -700,6 +550,10 @@ private extension ApprovalRequest.Kind {
             return "arrow.down.to.line"
         case .allowance:
             return "gift"
+        case .goalDeposit:
+            return "target"
+        case .goalCashOut:
+            return "arrow.up.forward"
         }
     }
 }

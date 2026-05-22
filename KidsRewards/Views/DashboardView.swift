@@ -10,29 +10,23 @@ struct DashboardView: View {
     @State private var editedKidName = ""
     @State private var allowanceAppliedMessage = ""
     @State private var navigationPath = NavigationPath()
+    @State private var activityExpanded = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    PageHeader(eyebrow: "Household", title: AppBranding.parentAppName) {
-                        RoundIconButton(systemImage: "plus") {
-                            withAnimation(KidCoinMotion.modal) {
-                                showingAddKid = true
-                            }
-                        }
-                        .accessibilityLabel("Add kid")
-                    }
+                    PageHeader(eyebrow: "Household", title: AppBranding.parentAppName)
 
                     if !store.state.kids.isEmpty {
                         householdSummarySection
-                        needsAttentionSection
-                        quickActionsSection
                     }
 
                     kidsSection
 
                     if !store.state.kids.isEmpty {
+                        needsAttentionSection
+                        quickActionsSection
                         recentActivitySection
                     }
 
@@ -234,23 +228,30 @@ struct DashboardView: View {
 
     private var kidsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(title: "Kids")
-            if store.state.kids.isEmpty {
-                EmptyStatePanel(
-                    systemImage: "plus",
-                    title: "Add your first kid",
-                    message: "Track points, savings, and allowance for everyone in the family.",
-                    actionTitle: "Add Kid"
-                ) {
+            HStack(alignment: .center) {
+                SectionLabel(title: "Kids")
+                Spacer()
+                RoundIconButton(systemImage: "plus") {
                     withAnimation(KidCoinMotion.modal) {
                         showingAddKid = true
                     }
                 }
+                .accessibilityLabel("Add kid")
+            }
+            if store.state.kids.isEmpty {
+                EmptyStatePanel(
+                    systemImage: "person.2",
+                    title: "No kids yet",
+                    message: "Track points, savings, and allowance for everyone in the family."
+                )
             } else {
                 VStack(spacing: 10) {
                     ForEach(store.state.kids) { kid in
                         NavigationLink(value: kid) {
-                            DashboardKidCard(kid: kid)
+                            DashboardKidCard(kid: kid, onEdit: {
+                                kidBeingEdited = kid
+                                editedKidName = kid.name
+                            })
                         }
                         .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         .swipeActions {
@@ -260,15 +261,6 @@ struct DashboardView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                kidBeingEdited = kid
-                                editedKidName = kid.name
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .tint(KidCoinTheme.primary)
-                        }
                     }
                 }
                 .animation(KidCoinMotion.list, value: store.state.kids)
@@ -276,9 +268,13 @@ struct DashboardView: View {
         }
     }
 
+    private let activityCollapseThreshold = 5
+
     @ViewBuilder
     private var recentActivitySection: some View {
-        let recent = store.recentTransactions(limit: 8)
+        let recent = store.recentTransactions(limit: 20)
+        let collapsible = recent.count >= activityCollapseThreshold
+        let visible = collapsible && !activityExpanded ? Array(recent.prefix(activityCollapseThreshold)) : recent
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel(title: "Recent activity")
             if recent.isEmpty {
@@ -290,20 +286,42 @@ struct DashboardView: View {
                     .tileCard(cornerRadius: 18)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(recent) { transaction in
+                    ForEach(visible) { transaction in
                         if let kid = store.kid(withID: transaction.kidID) {
                             NavigationLink(value: kid) {
                                 RewardTransactionRow(
                                     transaction: transaction,
                                     currencyCode: store.state.settings.currencyCode,
                                     variant: .household(kidName: kid.name)
-                            )
-                        }
+                                )
+                            }
                             .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         }
                     }
+
+                    if collapsible {
+                        Button {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                                activityExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Text(activityExpanded ? "Show less" : "Show \(recent.count - activityCollapseThreshold) more")
+                                    .font(.caption.weight(.semibold))
+                                Image(systemName: activityExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption2.weight(.bold))
+                            }
+                            .foregroundStyle(KidCoinTheme.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(KidCoinTheme.primary.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .animation(KidCoinMotion.list, value: recent)
+                .animation(.spring(response: 0.32, dampingFraction: 0.78), value: activityExpanded)
             }
         }
     }
@@ -508,6 +526,7 @@ private struct QuickActionChip: View {
 private struct DashboardKidCard: View {
     @EnvironmentObject private var store: RewardStore
     let kid: Kid
+    let onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -576,9 +595,16 @@ private struct DashboardKidCard: View {
 
             Spacer(minLength: 0)
 
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(KidCoinTheme.mutedText)
+            Button(action: onEdit) {
+                Image(systemName: "pencil")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.primary)
+                    .frame(width: 36, height: 36)
+                    .background(KidCoinTheme.primary.opacity(0.1))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(kid.name)")
         }
         .padding(16)
         .tileCard(cornerRadius: 22)

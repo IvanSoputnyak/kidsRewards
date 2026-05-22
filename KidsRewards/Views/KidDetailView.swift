@@ -339,6 +339,14 @@ private extension RewardTransaction {
             return "Vault interest"
         case .adjusted:
             return "Manual adjustment"
+        case .goalDeposited:
+            return "Goal deposit"
+        case .goalWithdrawn:
+            return "Goal withdrawal"
+        case .goalCashedOut:
+            return "Goal cash out"
+        case .goalInterest:
+            return "Goal interest"
         }
     }
 }

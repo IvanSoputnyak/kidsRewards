@@ -73,8 +73,12 @@ final class RewardStore: ObservableObject {
         state.kids.reduce(0) { $0 + $1.vaultPoints }
     }
 
+    var totalGoalPoints: Int {
+        state.kids.reduce(0) { $0 + $1.goalPoints }
+    }
+
     var totalHouseholdPoints: Int {
-        totalAvailablePoints + totalVaultPoints
+        totalAvailablePoints + totalVaultPoints + totalGoalPoints
     }
 
     func kid(withID id: UUID) -> Kid? {
@@ -104,7 +108,7 @@ final class RewardStore: ObservableObject {
     func isInterestScheduleDue(now: Date = Date()) -> Bool {
         let recurrence = state.settings.interestRecurrence
         guard recurrence != .none,
-              state.kids.contains(where: { interestPoints(for: $0) > 0 }) else {
+              state.kids.contains(where: { totalInterestPoints(for: $0) > 0 }) else {
             return false
         }
         if let lastApplied = state.settings.lastInterestAppliedAt,
@@ -127,7 +131,7 @@ final class RewardStore: ObservableObject {
     }
 
     func firstKidEligibleForVaultInterest() -> Kid? {
-        state.kids.first { interestPoints(for: $0) > 0 }
+        state.kids.first { totalInterestPoints(for: $0) > 0 }
     }
 
     func pendingRequestCount(for kid: Kid) -> Int {
@@ -175,7 +179,7 @@ final class RewardStore: ObservableObject {
     func addKid(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        state.kids.append(Kid(name: trimmed, availablePoints: 0, vaultPoints: 0))
+        state.kids.append(Kid(name: trimmed, availablePoints: 0, vaultPoints: 0, goalPoints: 0))
         save()
     }
 
@@ -202,7 +206,7 @@ final class RewardStore: ObservableObject {
     }
 
     func savingsGoalProgress(for kid: Kid) -> Int {
-        guard let goal = kid.savingsGoal else { return kid.totalPoints }
+        guard let goal = kid.savingsGoal else { return kid.goalPoints }
         return kid.savingsGoalProgress(toward: goal)
     }
 
@@ -388,42 +392,131 @@ final class RewardStore: ObservableObject {
 
     @discardableResult
     func applyInterest(to kid: Kid) -> Bool {
-        let points = interestPoints(for: kid)
-        return applyInterest(points: points, to: kid)
+        let vaultPts = interestPoints(for: kid)
+        let goalPts = goalInterestPoints(for: kid)
+        var didApplyAny = false
+        if applyVaultInterest(points: vaultPts, to: kid, persist: false) { didApplyAny = true }
+        if applyGoalInterest(points: goalPts, to: kid, persist: false) { didApplyAny = true }
+        if didApplyAny { save() }
+        return didApplyAny
     }
 
     @discardableResult
-    private func applyInterest(points: Int, to kid: Kid, persist: Bool = true) -> Bool {
+    private func applyVaultInterest(points: Int, to kid: Kid, persist: Bool = true) -> Bool {
         guard points > 0 else { return false }
-        var didApplyInterest = false
+        var didApply = false
         updateKid(kid.id) { current in
             current.vaultPoints += points
-            didApplyInterest = true
+            didApply = true
         }
-        guard didApplyInterest else { return false }
-        addTransaction(
-            kidID: kid.id,
-            kind: .interest,
-            points: points,
-            note: "Vault interest",
-            currencyAmount: nil
-        )
-        if persist {
-            save()
+        guard didApply else { return false }
+        addTransaction(kidID: kid.id, kind: .interest, points: points, note: "Vault interest", currencyAmount: nil)
+        if persist { save() }
+        return true
+    }
+
+    @discardableResult
+    private func applyGoalInterest(points: Int, to kid: Kid, persist: Bool = true) -> Bool {
+        guard points > 0 else { return false }
+        var didApply = false
+        updateKid(kid.id) { current in
+            current.goalPoints += points
+            didApply = true
         }
+        guard didApply else { return false }
+        addTransaction(kidID: kid.id, kind: .goalInterest, points: points, note: "Goal interest", currencyAmount: nil)
+        if persist { save() }
         return true
     }
 
     func requestInterest(for kid: Kid) {
         guard state.settings.approvalFlowEnabled else { return }
-        let points = interestPoints(for: kid)
+        let points = totalInterestPoints(for: kid)
         guard points > 0 else { return }
         addApprovalRequest(
             kidID: kid.id,
             kind: .interest,
             points: points,
-            note: "Vault interest request"
+            note: "Interest request"
         )
+        save()
+    }
+
+    @discardableResult
+    func depositToGoal(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        if state.settings.approvalFlowEnabled {
+            requestGoalDeposit(points: points, for: kid)
+            return min(points, kid.availablePoints) > 0
+        }
+        var depositedAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.availablePoints)
+            guard amount > 0 else { return }
+            depositedAmount = amount
+            current.availablePoints -= amount
+            current.goalPoints += amount
+        }
+        guard depositedAmount > 0 else { return false }
+        addTransaction(kidID: kid.id, kind: .goalDeposited, points: depositedAmount, note: "Goal deposit", currencyAmount: nil)
+        save()
+        return true
+    }
+
+    func requestGoalDeposit(points: Int, for kid: Kid) {
+        guard state.settings.approvalFlowEnabled, points > 0 else { return }
+        let amount = min(points, kid.availablePoints)
+        guard amount > 0 else { return }
+        addApprovalRequest(kidID: kid.id, kind: .goalDeposit, points: amount, note: "Goal deposit request")
+        save()
+    }
+
+    @discardableResult
+    func cashOutFromGoal(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        if state.settings.approvalFlowEnabled {
+            requestGoalCashOut(points: points, for: kid)
+            return min(points, kid.goalPoints) > 0
+        }
+        var cashedOut = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.goalPoints)
+            guard amount > 0 else { return }
+            cashedOut = amount
+            current.goalPoints -= amount
+        }
+        guard cashedOut > 0 else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .goalCashedOut,
+            points: cashedOut,
+            note: "Goal cash out",
+            currencyAmount: Decimal(cashedOut) * state.settings.currencyPerPoint
+        )
+        save()
+        return true
+    }
+
+    func requestGoalCashOut(points: Int, for kid: Kid) {
+        guard state.settings.approvalFlowEnabled, points > 0 else { return }
+        let amount = min(points, kid.goalPoints)
+        guard amount > 0 else { return }
+        addApprovalRequest(kidID: kid.id, kind: .goalCashOut, points: amount, note: "Goal cash out request")
+        save()
+    }
+
+    func withdrawFromGoal(points: Int, for kid: Kid) {
+        guard points > 0 else { return }
+        var withdrawnAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.goalPoints)
+            guard amount > 0 else { return }
+            withdrawnAmount = amount
+            current.goalPoints -= amount
+            current.availablePoints += amount
+        }
+        guard withdrawnAmount > 0 else { return }
+        addTransaction(kidID: kid.id, kind: .goalWithdrawn, points: withdrawnAmount, note: "Goal withdrawal", currencyAmount: nil)
         save()
     }
 
@@ -473,6 +566,25 @@ final class RewardStore: ObservableObject {
     func interestPoints(for kid: Kid) -> Int {
         let interest = Decimal(kid.vaultPoints) * state.settings.vaultInterestRate
         return NSDecimalNumber(decimal: interest).rounding(accordingToBehavior: nil).intValue
+    }
+
+    func goalInterestPoints(for kid: Kid) -> Int {
+        let interest = Decimal(kid.goalPoints) * state.settings.vaultInterestRate
+        return NSDecimalNumber(decimal: interest).rounding(accordingToBehavior: nil).intValue
+    }
+
+    func totalInterestPoints(for kid: Kid) -> Int {
+        interestPoints(for: kid) + goalInterestPoints(for: kid)
+    }
+
+    func setVaultInterestRate(_ rate: Decimal) {
+        state.settings.vaultInterestRate = max(rate, 0)
+        save()
+    }
+
+    func setDefaultAllowancePoints(_ points: Int) {
+        state.settings.allowancePoints = max(points, 0)
+        save()
     }
 
     func adjust(points requestedPoints: Int, note: String, for kid: Kid) {
@@ -712,17 +824,12 @@ final class RewardStore: ObservableObject {
         if state.settings.approvalFlowEnabled {
             var queuedAny = false
             for kid in state.kids {
-                let points = interestPoints(for: kid)
+                let points = totalInterestPoints(for: kid)
                 guard points > 0,
                       pendingApprovalRequest(kind: .interest, kidID: kid.id) == nil else {
                     continue
                 }
-                addApprovalRequest(
-                    kidID: kid.id,
-                    kind: .interest,
-                    points: points,
-                    note: "Vault interest request"
-                )
+                addApprovalRequest(kidID: kid.id, kind: .interest, points: points, note: "Interest request")
                 queuedAny = true
             }
             guard queuedAny else { return false }
@@ -733,10 +840,10 @@ final class RewardStore: ObservableObject {
 
         var appliedAny = false
         for kid in state.kids {
-            let points = interestPoints(for: kid)
-            if applyInterest(points: points, to: kid, persist: false) {
-                appliedAny = true
-            }
+            let vaultPts = interestPoints(for: kid)
+            let goalPts = goalInterestPoints(for: kid)
+            if applyVaultInterest(points: vaultPts, to: kid, persist: false) { appliedAny = true }
+            if applyGoalInterest(points: goalPts, to: kid, persist: false) { appliedAny = true }
         }
         guard appliedAny else { return false }
 
@@ -868,7 +975,25 @@ final class RewardStore: ObservableObject {
         case .cashOut:
             didApply = cashOutExact(points: currentRequest.points, for: kid)
         case .interest:
-            didApply = applyInterest(points: currentRequest.points, to: kid)
+            let vaultPts = interestPoints(for: kid)
+            let goalPts = goalInterestPoints(for: kid)
+            let currentTotal = vaultPts + goalPts
+            let storedTotal = currentRequest.points
+            let vaultApply: Int
+            let goalApply: Int
+            if currentTotal > 0 {
+                let ratio = Double(storedTotal) / Double(currentTotal)
+                vaultApply = Int((Double(vaultPts) * ratio).rounded())
+                goalApply = storedTotal - vaultApply
+            } else {
+                vaultApply = storedTotal
+                goalApply = 0
+            }
+            var interestApplied = false
+            if applyVaultInterest(points: vaultApply, to: kid, persist: false) { interestApplied = true }
+            if applyGoalInterest(points: goalApply, to: kid, persist: false) { interestApplied = true }
+            if interestApplied { save() }
+            didApply = interestApplied
             if didApply {
                 recordInterestScheduleApplied()
             }
@@ -889,6 +1014,10 @@ final class RewardStore: ObservableObject {
             applyAllowancePoints(currentRequest.points, toKidAt: index, date: Date())
             recordAllowanceScheduleApplied()
             didApply = true
+        case .goalDeposit:
+            didApply = goalDepositExact(points: currentRequest.points, for: kid)
+        case .goalCashOut:
+            didApply = goalCashOutExact(points: currentRequest.points, for: kid)
         }
         guard didApply else { return false }
 
@@ -1059,6 +1188,44 @@ final class RewardStore: ObservableObject {
     }
 
     @discardableResult
+    private func goalDepositExact(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var depositedAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.availablePoints)
+            guard amount > 0 else { return }
+            depositedAmount = amount
+            current.availablePoints -= amount
+            current.goalPoints += amount
+        }
+        guard depositedAmount > 0 else { return false }
+        addTransaction(kidID: kid.id, kind: .goalDeposited, points: depositedAmount, note: "Goal deposit", currencyAmount: nil)
+        save()
+        return true
+    }
+
+    @discardableResult
+    private func goalCashOutExact(points: Int, for kid: Kid) -> Bool {
+        guard points > 0 else { return false }
+        var cashedOut = 0
+        updateKid(kid.id) { current in
+            guard current.goalPoints >= points else { return }
+            cashedOut = points
+            current.goalPoints -= points
+        }
+        guard cashedOut > 0 else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .goalCashedOut,
+            points: cashedOut,
+            note: "Goal cash out",
+            currencyAmount: Decimal(cashedOut) * state.settings.currencyPerPoint
+        )
+        save()
+        return true
+    }
+
+    @discardableResult
     private func depositExact(points: Int, for kid: Kid) -> Bool {
         guard points > 0 else { return false }
         var depositedAmount = 0
@@ -1096,7 +1263,8 @@ final class RewardStore: ObservableObject {
         switch kind {
         case .adjusted:
             return points
-        case .earned, .deposited, .withdrawn, .cashedOut, .interest:
+        case .earned, .deposited, .withdrawn, .cashedOut, .interest,
+             .goalDeposited, .goalWithdrawn, .goalCashedOut, .goalInterest:
             return abs(points)
         }
     }
@@ -1104,6 +1272,7 @@ final class RewardStore: ObservableObject {
     private func apply(_ transaction: RewardTransaction, to kid: inout Kid, multiplier: Int) -> Bool {
         var nextAvailable = kid.availablePoints
         var nextVault = kid.vaultPoints
+        var nextGoal = kid.goalPoints
 
         switch transaction.kind {
         case .earned:
@@ -1120,11 +1289,22 @@ final class RewardStore: ObservableObject {
             nextVault += multiplier * transaction.points
         case .adjusted:
             nextAvailable += multiplier * transaction.points
+        case .goalDeposited:
+            nextAvailable -= multiplier * transaction.points
+            nextGoal += multiplier * transaction.points
+        case .goalWithdrawn:
+            nextAvailable += multiplier * transaction.points
+            nextGoal -= multiplier * transaction.points
+        case .goalCashedOut:
+            nextGoal -= multiplier * transaction.points
+        case .goalInterest:
+            nextGoal += multiplier * transaction.points
         }
 
-        guard nextAvailable >= 0, nextVault >= 0 else { return false }
+        guard nextAvailable >= 0, nextVault >= 0, nextGoal >= 0 else { return false }
         kid.availablePoints = nextAvailable
         kid.vaultPoints = nextVault
+        kid.goalPoints = nextGoal
         return true
     }
 

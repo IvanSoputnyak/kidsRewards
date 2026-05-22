@@ -5,6 +5,8 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
     var name: String
     var availablePoints: Int
     var vaultPoints: Int
+    /// Points deposited into the savings goal bucket.
+    var goalPoints: Int
     var savingsGoal: SavingsGoal?
     /// When set, overrides the global allowance amount for this kid.
     var allowancePoints: Int?
@@ -14,6 +16,7 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         case name
         case availablePoints
         case vaultPoints
+        case goalPoints
         case savingsGoal
         case allowancePoints
     }
@@ -23,6 +26,7 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         name: String,
         availablePoints: Int,
         vaultPoints: Int,
+        goalPoints: Int = 0,
         savingsGoal: SavingsGoal? = nil,
         allowancePoints: Int? = nil
     ) {
@@ -30,6 +34,7 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         self.name = name
         self.availablePoints = availablePoints
         self.vaultPoints = vaultPoints
+        self.goalPoints = goalPoints
         self.savingsGoal = savingsGoal
         self.allowancePoints = allowancePoints
     }
@@ -40,6 +45,7 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         name = try container.decode(String.self, forKey: .name)
         availablePoints = try container.decode(Int.self, forKey: .availablePoints)
         vaultPoints = try container.decode(Int.self, forKey: .vaultPoints)
+        goalPoints = try container.decodeIfPresent(Int.self, forKey: .goalPoints) ?? 0
         savingsGoal = try container.decodeIfPresent(SavingsGoal.self, forKey: .savingsGoal)
         allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints)
     }
@@ -50,16 +56,17 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         try container.encode(name, forKey: .name)
         try container.encode(availablePoints, forKey: .availablePoints)
         try container.encode(vaultPoints, forKey: .vaultPoints)
+        try container.encode(goalPoints, forKey: .goalPoints)
         try container.encodeIfPresent(savingsGoal, forKey: .savingsGoal)
         try container.encodeIfPresent(allowancePoints, forKey: .allowancePoints)
     }
 
     var totalPoints: Int {
-        availablePoints + vaultPoints
+        availablePoints + vaultPoints + goalPoints
     }
 
     func savingsGoalProgress(toward goal: SavingsGoal) -> Int {
-        min(totalPoints, goal.targetPoints)
+        min(goalPoints, goal.targetPoints)
     }
 }
 
@@ -269,6 +276,10 @@ struct RewardTransaction: Identifiable, Codable, Equatable {
         case cashedOut
         case interest
         case adjusted
+        case goalDeposited
+        case goalWithdrawn
+        case goalCashedOut
+        case goalInterest
     }
 
     var id = UUID()
@@ -281,15 +292,15 @@ struct RewardTransaction: Identifiable, Codable, Equatable {
 
     var pointsDisplayLabel: String {
         switch kind {
-        case .cashedOut:
+        case .cashedOut, .goalCashedOut:
             return "-\(points)"
-        case .deposited:
+        case .deposited, .goalDeposited:
             return "moved \(points)"
-        case .withdrawn:
+        case .withdrawn, .goalWithdrawn:
             return "+\(points)"
         case .adjusted:
             return points < 0 ? "\(points)" : "+\(points)"
-        case .earned, .interest:
+        case .earned, .interest, .goalInterest:
             return "+\(points)"
         }
     }
@@ -302,6 +313,8 @@ struct ApprovalRequest: Identifiable, Codable, Equatable {
         case choreCompleted
         case vaultDeposit
         case allowance
+        case goalDeposit
+        case goalCashOut
     }
 
     var id = UUID()

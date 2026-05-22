@@ -228,7 +228,9 @@ private struct ChildModeView: View {
     @State private var selectedKidID: UUID?
     @State private var isHistoryExpanded = false
     @State private var depositPoints = 1
+    @State private var goalDepositPoints = 1
     @State private var cashOutPoints = 1
+    @State private var goalCashOutPoints = 1
 
     private var selectedKid: Kid? {
         if let selectedKidID,
@@ -252,6 +254,11 @@ private struct ChildModeView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 20)
                 } else if let kid = selectedKid {
+                    if store.state.kids.count > 1 {
+                        kidSwitcher
+                            .padding(.top, 12)
+                    }
+
                     profileCard(for: kid)
                         .padding(.top, 10)
 
@@ -285,6 +292,13 @@ private struct ChildModeView: View {
                 self.selectedKidID = kidIDs.first
                 return
             }
+        }
+        .onChange(of: selectedKidID) { _, _ in
+            depositPoints = 1
+            goalDepositPoints = 1
+            cashOutPoints = 1
+            goalCashOutPoints = 1
+            isHistoryExpanded = false
         }
     }
 
@@ -352,6 +366,17 @@ private struct ChildModeView: View {
                         }
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(KidCoinTheme.mintText)
+                        if kid.goalPoints > 0 || kid.savingsGoal != nil {
+                            HStack(spacing: 4) {
+                                Text("\(kid.goalPoints)")
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText(value: Double(kid.goalPoints)))
+                                    .animation(KidCoinMotion.gentle, value: kid.goalPoints)
+                                Text(kid.savingsGoal?.title ?? "goal")
+                            }
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(KidCoinTheme.primary.opacity(0.7))
+                        }
                     }
                 }
                 .padding(.top, 8)
@@ -389,35 +414,34 @@ private struct ChildModeView: View {
         .clipped()
     }
 
-    @ViewBuilder
-    private func kidNameView(for kid: Kid) -> some View {
-        if store.state.kids.count > 1 {
-            Menu {
+    private var kidSwitcher: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
                 ForEach(store.state.kids) { k in
+                    let isSelected = k.id == (selectedKidID ?? store.state.kids.first?.id)
                     Button {
-                        selectedKidID = k.id
-                    } label: {
-                        if k.id == kid.id {
-                            Label(k.name, systemImage: "checkmark")
-                        } else {
-                            Text(k.name)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            selectedKidID = k.id
                         }
+                    } label: {
+                        Text(k.name)
+                            .font(.subheadline.weight(isSelected ? .bold : .regular))
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 9)
+                            .background(isSelected ? KidCoinTheme.primary : KidCoinTheme.muted)
+                            .foregroundStyle(isSelected ? Color.white : KidCoinTheme.foreground)
+                            .clipShape(Capsule())
                     }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(kid.name)
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(KidCoinTheme.foreground)
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(KidCoinTheme.mutedText)
+                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
                 }
             }
-        } else {
-            Text(kid.name)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+            .padding(.horizontal, 20)
         }
+    }
+
+    private func kidNameView(for kid: Kid) -> some View {
+        Text(kid.name)
+            .font(.system(size: 22, weight: .bold, design: .rounded))
     }
 
     // MARK: - Chores
@@ -472,30 +496,103 @@ private struct ChildModeView: View {
 
     // MARK: - Money section
 
+    private func estimatedMonthlyInterest(vault: Int) -> Int {
+        let rate = store.state.settings.vaultInterestRate
+        guard rate > 0, vault > 0 else { return 0 }
+        let perApp = NSDecimalNumber(decimal: Decimal(vault) * rate).rounding(accordingToBehavior: nil).intValue
+        switch store.state.settings.interestRecurrence {
+        case .none: return 0
+        case .daily: return perApp * 30
+        case .weekly: return Int(Double(perApp) * 52.0 / 12.0)
+        case .biweekly: return Int(Double(perApp) * 26.0 / 12.0)
+        case .monthly: return perApp
+        }
+    }
+
+    @ViewBuilder
+    private func estimatedGainPanel(projectedVault: Int) -> some View {
+        let rate = store.state.settings.vaultInterestRate
+        let monthly = estimatedMonthlyInterest(vault: projectedVault)
+        let yearly = monthly * 12
+        if rate > 0, projectedVault > 0 {
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Estimated gain")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                        .textCase(.uppercase)
+                        .tracking(0.8)
+                    if store.state.settings.interestRecurrence == .none {
+                        Text("\(NSDecimalNumber(decimal: Decimal(projectedVault) * rate).rounding(accordingToBehavior: nil).intValue) pts per app open")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(KidCoinTheme.mintText)
+                    } else if monthly > 0 {
+                        HStack(spacing: 6) {
+                            Text("≈\(monthly) pts/mo")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(KidCoinTheme.mintText)
+                            Text("·")
+                                .foregroundStyle(KidCoinTheme.mutedText)
+                                .font(.caption)
+                            Text("≈\(yearly) pts/yr")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(KidCoinTheme.mutedText)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(Formatters.percent(rate))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mintText)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(KidCoinTheme.mint.opacity(0.22))
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(KidCoinTheme.mint.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
     private func moneySection(for kid: Kid) -> some View {
         let depositPending = store.pendingApprovalRequest(kind: .vaultDeposit, kidID: kid.id) != nil
+        let goalDepositPending = store.pendingApprovalRequest(kind: .goalDeposit, kidID: kid.id) != nil
         let cashOutPending = store.pendingApprovalRequest(kind: .cashOut, kidID: kid.id) != nil
-        let interestPending = store.pendingApprovalRequest(kind: .interest, kidID: kid.id) != nil
-        let interestAmt = store.interestPoints(for: kid)
+        let goalCashOutPending = store.pendingApprovalRequest(kind: .goalCashOut, kidID: kid.id) != nil
+        let safeDeposit = min(depositPoints, max(kid.availablePoints, 1))
+        let projectedVault = kid.vaultPoints + safeDeposit
 
         return VStack(alignment: .leading, spacing: 16) {
             Text("Save & Money")
                 .font(.system(size: 22, weight: .bold, design: .rounded))
 
+            // Vault
             VStack(alignment: .leading, spacing: 8) {
+                Text("Vault (locked)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .textCase(.uppercase)
+                    .tracking(1)
+
                 HStack {
-                    Text("Save to vault")
+                    Text("Move to vault")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     CounterControl(value: $depositPoints, range: 1...max(kid.availablePoints, 1))
                 }
+
+                estimatedGainPanel(projectedVault: projectedVault)
+                    .animation(KidCoinMotion.gentle, value: projectedVault)
+
                 Button {
                     withAnimation(KidCoinMotion.list) {
                         store.requestDeposit(points: depositPoints, for: kid)
                     }
                     depositPoints = 1
                 } label: {
-                    Text(depositPending ? "Deposit pending" : "Request vault deposit")
+                    Text(depositPending ? "Deposit pending" : "Move to vault")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
@@ -507,15 +604,94 @@ private struct ChildModeView: View {
                 .disabled(depositPending || kid.availablePoints == 0)
             }
 
-            Divider()
-                .overlay(KidCoinTheme.border)
+            Divider().overlay(KidCoinTheme.border)
 
+            // Goal
             VStack(alignment: .leading, spacing: 8) {
-                Text("Cash out is a ledger entry — a parent pays you separately.")
+                Text(kid.savingsGoal.map { $0.title } ?? "Goal")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .textCase(.uppercase)
+                    .tracking(1)
+
+                if let goal = kid.savingsGoal {
+                    let progress = store.savingsGoalProgress(for: kid)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(progress) of \(goal.targetPoints) pts")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                        ProgressView(value: Double(min(progress, goal.targetPoints)), total: Double(goal.targetPoints))
+                            .tint(KidCoinTheme.primary)
+                    }
+                }
+
+                HStack {
+                    Text("Move to goal")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    CounterControl(value: $goalDepositPoints, range: 1...max(kid.availablePoints, 1))
+                }
+
+                Button {
+                    withAnimation(KidCoinMotion.list) {
+                        store.requestGoalDeposit(points: goalDepositPoints, for: kid)
+                    }
+                    goalDepositPoints = 1
+                } label: {
+                    Text(goalDepositPending ? "Deposit pending" : "Move to goal")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(goalDepositPending || kid.availablePoints == 0 ? KidCoinTheme.muted : KidCoinTheme.primary.opacity(0.15))
+                        .foregroundStyle(goalDepositPending || kid.availablePoints == 0 ? KidCoinTheme.mutedText : KidCoinTheme.primary)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
+                .disabled(goalDepositPending || kid.availablePoints == 0)
+
+                if kid.goalPoints > 0 {
+                    HStack {
+                        Text("Cash out from goal")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        CounterControl(value: $goalCashOutPoints, range: 1...max(kid.goalPoints, 1))
+                    }
+                    Button {
+                        withAnimation(KidCoinMotion.list) {
+                            store.requestGoalCashOut(points: goalCashOutPoints, for: kid)
+                        }
+                        goalCashOutPoints = 1
+                    } label: {
+                        let amt = Formatters.currency(store.currencyValue(for: min(goalCashOutPoints, kid.goalPoints)), code: store.state.settings.currencyCode)
+                        Text(goalCashOutPending ? "Cash out pending" : "Cash out goal \(amt)")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(goalCashOutPending ? KidCoinTheme.muted : KidCoinTheme.primary.opacity(0.12))
+                            .foregroundStyle(goalCashOutPending ? KidCoinTheme.mutedText : KidCoinTheme.primary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
+                    .disabled(goalCashOutPending)
+                }
+            }
+
+            Divider().overlay(KidCoinTheme.border)
+
+            // Cash out available
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Cash out")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .textCase(.uppercase)
+                    .tracking(1)
+
+                Text("A parent pays you the cash amount separately.")
                     .font(.caption)
                     .foregroundStyle(KidCoinTheme.mutedText)
+
                 HStack {
-                    Text("Cash out")
+                    Text("From available")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     CounterControl(value: $cashOutPoints, range: 1...max(kid.availablePoints, 1))
@@ -537,22 +713,6 @@ private struct ChildModeView: View {
                 }
                 .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
                 .disabled(cashOutPending || kid.availablePoints == 0)
-
-                Button {
-                    withAnimation(KidCoinMotion.list) {
-                        store.requestInterest(for: kid)
-                    }
-                } label: {
-                    Text(interestPending ? "Interest pending" : "Request vault interest")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(KidCoinTheme.muted.opacity(0.65))
-                        .foregroundStyle(interestPending || interestAmt == 0 ? KidCoinTheme.mutedText : KidCoinTheme.foreground)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
-                .disabled(interestPending || interestAmt == 0)
             }
         }
         .padding(20)

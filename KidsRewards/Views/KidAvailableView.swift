@@ -14,6 +14,9 @@ struct KidAvailableView: View {
     @State private var adjustmentNote = ""
     @State private var allowancePointsText = ""
     @State private var kidAllowancePointsText = ""
+    @State private var allowanceRecurrence: RewardTask.Recurrence = .none
+    @State private var allowanceWeekday: Int = 1
+    @State private var allowanceMonthDay: Int = 1
     @State private var showingCashOutConfirmation = false
 
     private var kid: Kid? {
@@ -101,6 +104,48 @@ struct KidAvailableView: View {
                     .fieldPill()
                 }
 
+                SettingsField(label: "Schedule", hint: "Runs automatically when the app opens on the due day") {
+                    Picker("", selection: $allowanceRecurrence) {
+                        ForEach(RewardTask.Recurrence.allCases, id: \.self) {
+                            Text($0.label).tag($0)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(KidCoinTheme.primary)
+                    .onChange(of: allowanceRecurrence) { _, newValue in
+                        store.setAllowanceRecurrence(newValue)
+                    }
+                }
+
+                if allowanceRecurrence == .weekly || allowanceRecurrence == .biweekly {
+                    SettingsField(label: "Day of week", hint: "Allowance fires on or after this day each cycle") {
+                        Picker("", selection: $allowanceWeekday) {
+                            ForEach(1...7, id: \.self) { day in
+                                Text(weekdayName(day)).tag(day)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(KidCoinTheme.primary)
+                        .onChange(of: allowanceWeekday) { _, newValue in
+                            store.setAllowanceWeekday(newValue)
+                        }
+                    }
+                }
+
+                if allowanceRecurrence == .monthly {
+                    SettingsField(label: "Day of month", hint: "Allowance fires on or after this day each month") {
+                        CounterControl(value: $allowanceMonthDay, range: 1...28)
+                            .onChange(of: allowanceMonthDay) { _, newValue in
+                                store.setAllowanceMonthDay(newValue)
+                            }
+                    }
+                }
+
+                Text(allowanceScheduleCaption)
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .lineSpacing(2)
+
                 PillButton(
                     title: "Apply to \(kid.name)",
                     systemImage: "person.fill.checkmark",
@@ -125,12 +170,6 @@ struct KidAvailableView: View {
                     }
                 }
 
-                if store.state.settings.allowanceRecurrence != .none {
-                    Text(allowanceScheduleCaption)
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                }
-
                 PillButton(
                     title: "Save Allowance Settings",
                     systemImage: "checkmark",
@@ -142,6 +181,7 @@ struct KidAvailableView: View {
             .padding(18)
             .tileCard(cornerRadius: 26)
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: allowanceRecurrence)
     }
 
     private func manualAdjustmentSection(for kid: Kid) -> some View {
@@ -223,12 +263,50 @@ struct KidAvailableView: View {
     }
 
     private var allowanceScheduleCaption: String {
-        let recurrence = store.state.settings.allowanceRecurrence
-        let cadence = recurrence.label.lowercased()
-        if let last = store.state.settings.lastAllowanceAppliedAt {
-            return "Auto-allowance: \(cadence). Last applied \(last.formatted(date: .abbreviated, time: .omitted)). Schedule in Settings."
+        switch allowanceRecurrence {
+        case .none:
+            return "Use Apply buttons above to give allowance manually."
+        case .daily:
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs daily. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs daily when the app opens."
+        case .weekly:
+            let day = weekdayName(allowanceWeekday)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs every \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs every \(day) when the app opens."
+        case .biweekly:
+            let day = weekdayName(allowanceWeekday)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs every other \(day). Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs every other \(day) when the app opens."
+        case .monthly:
+            let suffix = ordinalSuffix(for: allowanceMonthDay)
+            if let last = store.state.settings.lastAllowanceAppliedAt {
+                return "Runs on the \(allowanceMonthDay)\(suffix) of each month. Last applied \(last.formatted(date: .abbreviated, time: .omitted))."
+            }
+            return "Runs on the \(allowanceMonthDay)\(suffix) of each month when the app opens."
         }
-        return "Auto-allowance: \(cadence). Adjust schedule in Settings."
+    }
+
+    private func weekdayName(_ weekday: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        guard weekday >= 1, weekday <= 7 else { return "" }
+        return formatter.weekdaySymbols[weekday - 1]
+    }
+
+    private func ordinalSuffix(for day: Int) -> String {
+        switch day {
+        case 11, 12, 13: return "th"
+        case _ where day % 10 == 1: return "st"
+        case _ where day % 10 == 2: return "nd"
+        case _ where day % 10 == 3: return "rd"
+        default: return "th"
+        }
     }
 
     private var cashOutButtonTitle: String {
@@ -266,6 +344,9 @@ struct KidAvailableView: View {
 
     private func loadAllowanceSettings() {
         allowancePointsText = "\(store.state.settings.allowancePoints)"
+        allowanceRecurrence = store.state.settings.allowanceRecurrence
+        allowanceWeekday = store.state.settings.allowanceWeekday ?? 1
+        allowanceMonthDay = store.state.settings.allowanceMonthDay ?? 1
         guard let kid else { return }
         if let kidAllowance = kid.allowancePoints {
             kidAllowancePointsText = "\(kidAllowance)"
@@ -275,12 +356,7 @@ struct KidAvailableView: View {
     }
 
     private func saveAllowanceSettings() {
-        store.updateSettings(
-            currencyCode: store.state.settings.currencyCode,
-            currencyPerPoint: store.state.settings.currencyPerPoint,
-            vaultInterestRate: store.state.settings.vaultInterestRate,
-            allowancePoints: parsedAllowancePoints
-        )
+        store.setDefaultAllowancePoints(parsedAllowancePoints)
         if let kid {
             let trimmed = kidAllowancePointsText.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
