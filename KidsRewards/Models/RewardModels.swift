@@ -10,6 +10,10 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
     var savingsGoal: SavingsGoal?
     /// When set, overrides the global allowance amount for this kid.
     var allowancePoints: Int?
+    /// 0–100: percentage of each earn auto-moved to vault.
+    var autoVaultPercent: Int
+    /// 0–100: percentage of each earn auto-moved to goal.
+    var autoGoalPercent: Int
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -19,6 +23,8 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         case goalPoints
         case savingsGoal
         case allowancePoints
+        case autoVaultPercent
+        case autoGoalPercent
     }
 
     init(
@@ -28,7 +34,9 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         vaultPoints: Int,
         goalPoints: Int = 0,
         savingsGoal: SavingsGoal? = nil,
-        allowancePoints: Int? = nil
+        allowancePoints: Int? = nil,
+        autoVaultPercent: Int = 0,
+        autoGoalPercent: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -37,6 +45,8 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         self.goalPoints = goalPoints
         self.savingsGoal = savingsGoal
         self.allowancePoints = allowancePoints
+        self.autoVaultPercent = autoVaultPercent
+        self.autoGoalPercent = autoGoalPercent
     }
 
     init(from decoder: Decoder) throws {
@@ -48,6 +58,8 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         goalPoints = try container.decodeIfPresent(Int.self, forKey: .goalPoints) ?? 0
         savingsGoal = try container.decodeIfPresent(SavingsGoal.self, forKey: .savingsGoal)
         allowancePoints = try container.decodeIfPresent(Int.self, forKey: .allowancePoints)
+        autoVaultPercent = try container.decodeIfPresent(Int.self, forKey: .autoVaultPercent) ?? 0
+        autoGoalPercent = try container.decodeIfPresent(Int.self, forKey: .autoGoalPercent) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -59,6 +71,8 @@ struct Kid: Identifiable, Codable, Equatable, Hashable {
         try container.encode(goalPoints, forKey: .goalPoints)
         try container.encodeIfPresent(savingsGoal, forKey: .savingsGoal)
         try container.encodeIfPresent(allowancePoints, forKey: .allowancePoints)
+        try container.encode(autoVaultPercent, forKey: .autoVaultPercent)
+        try container.encode(autoGoalPercent, forKey: .autoGoalPercent)
     }
 
     var totalPoints: Int {

@@ -293,6 +293,7 @@ final class RewardStore: ObservableObject {
             date: date
         )
         updateTaskCompletion(task, for: kid, at: date)
+        applyAutodeposit(earnedPoints: task.points, kidID: kid.id)
         save()
     }
 
@@ -762,15 +763,17 @@ final class RewardStore: ObservableObject {
     }
 
     private func applyAllowancePoints(_ points: Int, toKidAt index: Int, date: Date) {
+        let kidID = state.kids[index].id
         state.kids[index].availablePoints += points
         addTransaction(
-            kidID: state.kids[index].id,
+            kidID: kidID,
             kind: .earned,
             points: points,
             note: "Allowance",
             currencyAmount: nil,
             date: date
         )
+        applyAutodeposit(earnedPoints: points, kidID: kidID)
     }
 
     @discardableResult
@@ -1223,6 +1226,70 @@ final class RewardStore: ObservableObject {
         )
         save()
         return true
+    }
+
+    func depositDirectly(points: Int, for kid: Kid) {
+        guard points > 0 else { return }
+        var depositedAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.availablePoints)
+            guard amount > 0 else { return }
+            depositedAmount = amount
+            current.availablePoints -= amount
+            current.vaultPoints += amount
+        }
+        guard depositedAmount > 0 else { return }
+        addTransaction(kidID: kid.id, kind: .deposited, points: depositedAmount, note: "Vault deposit", currencyAmount: nil)
+        save()
+    }
+
+    func depositToGoalDirectly(points: Int, for kid: Kid) {
+        guard points > 0 else { return }
+        var depositedAmount = 0
+        updateKid(kid.id) { current in
+            let amount = min(points, current.availablePoints)
+            guard amount > 0 else { return }
+            depositedAmount = amount
+            current.availablePoints -= amount
+            current.goalPoints += amount
+        }
+        guard depositedAmount > 0 else { return }
+        addTransaction(kidID: kid.id, kind: .goalDeposited, points: depositedAmount, note: "Goal deposit", currencyAmount: nil)
+        save()
+    }
+
+    func setAutoVaultPercent(_ percent: Int, for kid: Kid) {
+        updateKid(kid.id) { $0.autoVaultPercent = max(0, min(100, percent)) }
+        save()
+    }
+
+    func setAutoGoalPercent(_ percent: Int, for kid: Kid) {
+        updateKid(kid.id) { $0.autoGoalPercent = max(0, min(100, percent)) }
+        save()
+    }
+
+    private func applyAutodeposit(earnedPoints: Int, kidID: UUID) {
+        guard let kid = state.kids.first(where: { $0.id == kidID }) else { return }
+        let vaultAmt = kid.autoVaultPercent > 0
+            ? min(Int(Double(earnedPoints) * Double(kid.autoVaultPercent) / 100.0), earnedPoints)
+            : 0
+        let goalAmt = kid.autoGoalPercent > 0
+            ? min(Int(Double(earnedPoints) * Double(kid.autoGoalPercent) / 100.0), earnedPoints - vaultAmt)
+            : 0
+        if vaultAmt > 0 {
+            updateKid(kidID) { current in
+                current.availablePoints -= vaultAmt
+                current.vaultPoints += vaultAmt
+            }
+            addTransaction(kidID: kidID, kind: .deposited, points: vaultAmt, note: "Auto-save", currencyAmount: nil)
+        }
+        if goalAmt > 0 {
+            updateKid(kidID) { current in
+                current.availablePoints -= goalAmt
+                current.goalPoints += goalAmt
+            }
+            addTransaction(kidID: kidID, kind: .goalDeposited, points: goalAmt, note: "Auto-save to goal", currencyAmount: nil)
+        }
     }
 
     @discardableResult

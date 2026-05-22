@@ -10,7 +10,7 @@ struct DashboardView: View {
     @State private var editedKidName = ""
     @State private var allowanceAppliedMessage = ""
     @State private var navigationPath = NavigationPath()
-    @State private var activityExpanded = false
+    @State private var activityVisibleCount = 5
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -268,16 +268,26 @@ struct DashboardView: View {
         }
     }
 
-    private let activityCollapseThreshold = 5
+    private let activityPageSize = 10
+    private let activityInitialCount = 5
 
     @ViewBuilder
     private var recentActivitySection: some View {
-        let recent = store.recentTransactions(limit: 20)
-        let collapsible = recent.count >= activityCollapseThreshold
-        let visible = collapsible && !activityExpanded ? Array(recent.prefix(activityCollapseThreshold)) : recent
+        let all = store.recentTransactions(limit: 10_000)
+        let total = all.count
+        let visible = Array(all.prefix(activityVisibleCount))
+        let hasMore = activityVisibleCount < total
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel(title: "Recent activity")
-            if recent.isEmpty {
+            HStack(alignment: .firstTextBaseline) {
+                SectionLabel(title: "Recent activity")
+                Spacer()
+                if total > 0 {
+                    Text("\(total) total")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                }
+            }
+            if all.isEmpty {
                 Text("Activity from chores, allowance, vault, and cash out will show up here.")
                     .font(.caption)
                     .foregroundStyle(KidCoinTheme.mutedText)
@@ -299,16 +309,16 @@ struct DashboardView: View {
                         }
                     }
 
-                    if collapsible {
+                    if hasMore {
                         Button {
                             withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                                activityExpanded.toggle()
+                                activityVisibleCount += activityPageSize
                             }
                         } label: {
                             HStack(spacing: 5) {
-                                Text(activityExpanded ? "Show less" : "Show \(recent.count - activityCollapseThreshold) more")
+                                Text("Show \(min(activityPageSize, total - activityVisibleCount)) more")
                                     .font(.caption.weight(.semibold))
-                                Image(systemName: activityExpanded ? "chevron.up" : "chevron.down")
+                                Image(systemName: "chevron.down")
                                     .font(.caption2.weight(.bold))
                             }
                             .foregroundStyle(KidCoinTheme.primary)
@@ -320,8 +330,7 @@ struct DashboardView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .animation(KidCoinMotion.list, value: recent)
-                .animation(.spring(response: 0.32, dampingFraction: 0.78), value: activityExpanded)
+                .animation(KidCoinMotion.list, value: visible.map(\.id))
             }
         }
     }
