@@ -14,6 +14,18 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.settings, .defaults)
     }
 
+    func testCorruptSavedStateIsNotOverwrittenWithEmptyState() throws {
+        let fileURL = temporaryStateURL()
+        let corruptData = Data("{ not valid json".utf8)
+        try corruptData.write(to: fileURL)
+
+        let store = RewardStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.state.kids.isEmpty)
+        XCTAssertTrue(store.persistenceErrorMessage?.contains("Could not load saved data") == true)
+        XCTAssertEqual(try Data(contentsOf: fileURL), corruptData)
+    }
+
     func testSeededInitialStateIsNotReplacedByExistingFile() throws {
         let fileURL = temporaryStateURL()
         let staleState = RewardState(
@@ -260,13 +272,13 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertTrue(unlockedWithoutPIN)
     }
 
-    func testKeychainPINFailsClosedWhenStoredPayloadIsInvalid() {
+    func testKeychainPINFailsClosedWhenStoredPayloadIsInvalid() throws {
         let service = "com.kidcoin-keeper.tests.\(UUID().uuidString)"
         let account = "parent-pin"
         let manager = KeychainParentPINManager(service: service, account: account)
         defer { manager.clear() }
 
-        writeKeychainData(Data("not-json".utf8), service: service, account: account)
+        try writeKeychainData(Data("not-json".utf8), service: service, account: account)
 
         XCTAssertTrue(manager.hasPIN)
         XCTAssertFalse(manager.verify(pin: "1234"))
@@ -283,7 +295,7 @@ final class RewardStoreTests: XCTestCase {
             salt: salt,
             hash: singleHash(pin: "4321", salt: salt)
         )
-        writeKeychainData(try JSONEncoder().encode(payload), service: service, account: account)
+        try writeKeychainData(try JSONEncoder().encode(payload), service: service, account: account)
 
         XCTAssertTrue(manager.hasPIN)
         XCTAssertTrue(manager.verify(pin: "4321"))
@@ -815,6 +827,25 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertTrue(store.isAllowanceScheduleDue(now: anchor.addingTimeInterval(8 * 24 * 3600)))
     }
 
+    func testAllowanceScheduleNotDueWhenAllEligibleKidsAlreadyHavePendingApproval() {
+        let anchor = Date(timeIntervalSince1970: 4_102_444_800) // year 2100
+        var settings = RewardSettings(
+            currencyCode: "USD",
+            currencyPerPoint: 1,
+            vaultInterestRate: 0.05,
+            approvalFlowEnabled: true,
+            allowancePoints: 5,
+            allowanceRecurrence: .daily
+        )
+        settings.lastAllowanceAppliedAt = anchor
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestAllowance(points: 5, for: store.state.kids[0])
+
+        XCTAssertFalse(store.isAllowanceScheduleDue(now: anchor.addingTimeInterval(25 * 3600)))
+    }
+
     func testEarnedPointsThisWeekSumsEarnedTransactions() {
         let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
         let now = Date()
@@ -1340,6 +1371,24 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(transaction?.kind, .earned)
         XCTAssertEqual(transaction?.points, 6)
         XCTAssertEqual(transaction?.note, "Mow lawn")
+    }
+
+    func testChoreCompletionApprovalUsesRequestedSnapshotWhenTaskChanges() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let task = RewardTask(title: "Sweep", points: 3)
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        let store = makeStore(kids: [kid], tasks: [task], settings: settings)
+
+        store.requestChoreCompletion(task: task, for: store.state.kids[0])
+        let request = store.state.approvalRequests[0]
+        store.updateTask(task, title: "Mop", points: 9)
+
+        XCTAssertTrue(store.approveRequest(request))
+        XCTAssertEqual(store.state.kids[0].availablePoints, 3)
+        let transaction = store.transactions(for: store.state.kids[0]).first
+        XCTAssertEqual(transaction?.points, 3)
+        XCTAssertEqual(transaction?.note, "Sweep")
     }
 
     func testDuplicateChoreCompletionRequestReplacesPrevious() {
@@ -2541,6 +2590,20 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertTrue(store.isInterestScheduleDue(now: anchor.addingTimeInterval(25 * 3600)))
     }
 
+    func testInterestScheduleNotDueWhenAllEligibleKidsAlreadyHavePendingApproval() {
+        let anchor = Date(timeIntervalSince1970: 4_102_444_800) // year 2100
+        var settings = RewardSettings.defaults
+        settings.approvalFlowEnabled = true
+        settings.interestRecurrence = .daily
+        settings.lastInterestAppliedAt = anchor
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 20)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.requestInterest(for: store.state.kids[0])
+
+        XCTAssertFalse(store.isInterestScheduleDue(now: anchor.addingTimeInterval(25 * 3600)))
+    }
+
     func testIsInterestScheduleDueRespectsDueDate() throws {
         let calendar = RecurrenceSchedule.configuredCalendar()
         let applied = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
@@ -3352,6 +3415,22 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.kids[0].availablePoints, 0)
     }
 
+    func testCorrectGoalCashOutTransactionUpdatesCurrencyAmount() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, goalPoints: 10)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 2, vaultInterestRate: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.cashOutFromGoal(points: 4, for: store.state.kids[0])
+        let transaction = store.transactions(for: store.state.kids[0])[0]
+
+        XCTAssertTrue(store.correctTransaction(transaction, points: 2, note: "Corrected"))
+        let corrected = store.transactions(for: store.state.kids[0])[0]
+        XCTAssertEqual(corrected.points, 2)
+        XCTAssertEqual(corrected.note, "Corrected")
+        XCTAssertEqual(corrected.currencyAmount, 4)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 8)
+    }
+
     private func makeStore(
         kids: [Kid],
         tasks: [RewardTask] = [],
@@ -3427,7 +3506,13 @@ final class RewardStoreTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString)
     }
 
-    private func writeKeychainData(_ data: Data, service: String, account: String) {
+    private func writeKeychainData(
+        _ data: Data,
+        service: String,
+        account: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -3438,7 +3523,14 @@ final class RewardStoreTests: XCTestCase {
         var addQuery = query
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        XCTAssertEqual(SecItemAdd(addQuery as CFDictionary, nil), errSecSuccess)
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            if status == errSecMissingEntitlement {
+                throw XCTSkip("Keychain direct-write tests require a signed test host with Keychain access.")
+            }
+            XCTFail("SecItemAdd failed with status \(status)", file: file, line: line)
+            return
+        }
     }
 
     private func singleHash(pin: String, salt: Data) -> Data {

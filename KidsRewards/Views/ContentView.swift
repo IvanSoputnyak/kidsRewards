@@ -228,12 +228,9 @@ private struct ChildModeView: View {
     @State private var selectedKidID: UUID?
     @State private var isHistoryExpanded = false
     @State private var depositPoints = 1
-    @State private var withdrawVaultPoints = 1
     @State private var goalDepositPoints = 1
     @State private var cashOutPoints = 1
     @State private var goalCashOutPoints = 1
-    @State private var kidGoalTitle = ""
-    @State private var kidGoalTargetPoints = 25
 
     private var selectedKid: Kid? {
         if let selectedKidID,
@@ -274,7 +271,7 @@ private struct ChildModeView: View {
                     if store.state.settings.approvalFlowEnabled {
                         moneySection(for: kid)
                     } else {
-                        Text("Ask a parent to turn on approval flow in Settings to submit chore and cash out requests.")
+                        Text("Ask a parent to turn on approval flow in Settings to submit chore and money requests.")
                             .font(.caption)
                             .foregroundStyle(KidCoinTheme.mutedText)
                             .multilineTextAlignment(.center)
@@ -293,7 +290,6 @@ private struct ChildModeView: View {
             if selectedKidID == nil {
                 selectedKidID = store.state.kids.first?.id
             }
-            syncKidGoalFields(for: selectedKid)
         }
         .onChange(of: store.state.kids.map(\.id)) { _, kidIDs in
             guard let selectedKidID, kidIDs.contains(selectedKidID) else {
@@ -303,19 +299,10 @@ private struct ChildModeView: View {
         }
         .onChange(of: selectedKidID) { _, _ in
             depositPoints = 1
-            withdrawVaultPoints = 1
             goalDepositPoints = 1
             cashOutPoints = 1
             goalCashOutPoints = 1
             isHistoryExpanded = false
-            syncKidGoalFields(for: selectedKid)
-        }
-        .onChange(of: selectedKid?.savingsGoal) { _, _ in
-            syncKidGoalFields(for: selectedKid)
-        }
-        .onChange(of: selectedKid?.vaultPoints) { _, newVault in
-            let cap = max(newVault ?? 1, 1)
-            if withdrawVaultPoints > cap { withdrawVaultPoints = cap }
         }
         .onChange(of: selectedKid?.availablePoints) { _, newAvail in
             let cap = max(newAvail ?? 1, 1)
@@ -521,6 +508,16 @@ private struct ChildModeView: View {
     private func kidVaultSection(for kid: Kid) -> some View {
         let capped = kid.availablePoints > 0 ? min(depositPoints, kid.availablePoints) : 0
         let projected = kid.vaultPoints + capped
+        let approvalEnabled = store.state.settings.approvalFlowEnabled
+        let vaultDepositPending = store.pendingApprovalRequest(kind: .vaultDeposit, kidID: kid.id) != nil
+        let vaultDepositDisabled = !approvalEnabled || kid.availablePoints == 0 || vaultDepositPending
+        let vaultDepositTitle = !approvalEnabled
+            ? "Ask a parent to enable requests"
+            : vaultDepositPending
+                ? "Vault save pending"
+                : kid.availablePoints == 0
+                    ? "No points to save"
+                    : "Request save \(depositPoints) \(depositPoints == 1 ? "point" : "points") to vault"
 
         return VStack(alignment: .leading, spacing: 14) {
             Text("Vault")
@@ -562,85 +559,49 @@ private struct ChildModeView: View {
                     .animation(KidCoinMotion.gentle, value: projected)
 
                 Button {
+                    guard approvalEnabled else { return }
                     withAnimation(KidCoinMotion.list) {
-                        store.depositDirectly(points: depositPoints, for: kid)
+                        store.requestDeposit(points: depositPoints, for: kid)
                     }
                     depositPoints = 1
                 } label: {
-                    Text(kid.availablePoints == 0
-                         ? "No points to save"
-                         : "Save \(depositPoints) \(depositPoints == 1 ? "point" : "points") to vault")
+                    Text(vaultDepositTitle)
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
-                        .background(kid.availablePoints == 0
+                        .background(vaultDepositDisabled
                                     ? KidCoinTheme.muted
                                     : KidCoinTheme.mint.opacity(0.35))
-                        .foregroundStyle(kid.availablePoints == 0
+                        .foregroundStyle(vaultDepositDisabled
                                          ? KidCoinTheme.mutedText
                                          : KidCoinTheme.mintText)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
-                .disabled(kid.availablePoints == 0)
+                .disabled(vaultDepositDisabled)
 
-                // Withdraw
                 if kid.vaultPoints > 0 {
                     Divider().overlay(KidCoinTheme.border)
 
-                    HStack {
-                        Text("Withdraw from vault")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Need points back?")
                             .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        CounterControl(value: $withdrawVaultPoints, range: 1...max(kid.vaultPoints, 1))
+                        Text("Ask a parent to move vault points back to available.")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
                     }
-
-                    Button {
-                        withAnimation(KidCoinMotion.list) {
-                            store.withdraw(points: withdrawVaultPoints, for: kid)
-                        }
-                        withdrawVaultPoints = 1
-                    } label: {
-                        Text("Move \(withdrawVaultPoints) \(withdrawVaultPoints == 1 ? "point" : "points") to available")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                            .background(KidCoinTheme.primary.opacity(0.1))
-                            .foregroundStyle(KidCoinTheme.primary)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
                 }
 
-                // Auto-save setting
                 Divider().overlay(KidCoinTheme.border)
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Auto-save to vault")
                         .font(.subheadline.weight(.semibold))
-                    Text("Automatically move this % of every earn to vault.")
+                    Text(kid.autoVaultPercent == 0
+                         ? "Auto-save is off. A parent can turn it on in Vault settings."
+                         : "Auto-saving \(kid.autoVaultPercent)% of every earn to vault.")
                         .font(.caption)
                         .foregroundStyle(KidCoinTheme.mutedText)
-                    HStack(spacing: 8) {
-                        ForEach([0, 10, 25, 50], id: \.self) { pct in
-                            Button {
-                                store.setAutoVaultPercent(pct, for: kid)
-                            } label: {
-                                Text(pct == 0 ? "Off" : "\(pct)%")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 9)
-                                    .background(kid.autoVaultPercent == pct
-                                                ? KidCoinTheme.mint.opacity(0.35)
-                                                : KidCoinTheme.muted)
-                                    .foregroundStyle(kid.autoVaultPercent == pct
-                                                     ? KidCoinTheme.mintText
-                                                     : KidCoinTheme.mutedText)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
-                        }
-                    }
                 }
             }
             .padding(20)
@@ -650,21 +611,20 @@ private struct ChildModeView: View {
         .padding(.top, 22)
     }
 
-    // MARK: - Goal section (always visible, direct deposit)
-
-    private func syncKidGoalFields(for kid: Kid?) {
-        guard let kid else { return }
-        if let goal = kid.savingsGoal {
-            kidGoalTitle = goal.title
-            kidGoalTargetPoints = goal.targetPoints
-        } else {
-            kidGoalTitle = ""
-            kidGoalTargetPoints = 25
-        }
-    }
+    // MARK: - Goal section
 
     private func kidGoalSection(for kid: Kid) -> some View {
+        let approvalEnabled = store.state.settings.approvalFlowEnabled
+        let goalDepositPending = store.pendingApprovalRequest(kind: .goalDeposit, kidID: kid.id) != nil
         let goalCashOutPending = store.pendingApprovalRequest(kind: .goalCashOut, kidID: kid.id) != nil
+        let goalDepositDisabled = !approvalEnabled || kid.availablePoints == 0 || goalDepositPending
+        let goalDepositTitle = !approvalEnabled
+            ? "Ask a parent to enable requests"
+            : goalDepositPending
+                ? "Goal save pending"
+                : kid.availablePoints == 0
+                    ? "No points to save"
+                    : "Request save \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points") to goal"
 
         return VStack(alignment: .leading, spacing: 14) {
             Text("Goal")
@@ -685,24 +645,15 @@ private struct ChildModeView: View {
                                     .foregroundStyle(KidCoinTheme.mutedText)
                             }
                             Spacer()
-                            Button {
-                                withAnimation(KidCoinMotion.list) {
-                                    store.clearSavingsGoal(for: kid)
-                                }
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(KidCoinTheme.destructive)
-                                    .frame(width: 32, height: 32)
-                                    .background(KidCoinTheme.destructive.opacity(0.1))
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.94))
                         }
                         ProgressView(value: Double(min(progress, goal.targetPoints)), total: Double(goal.targetPoints))
                             .tint(KidCoinTheme.primary)
                             .animation(KidCoinMotion.gentle, value: progress)
                     }
+                } else {
+                    Text("Ask a parent to set a savings goal.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -727,51 +678,6 @@ private struct ChildModeView: View {
 
                 Divider().overlay(KidCoinTheme.border)
 
-                // Set / update goal
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("My goal")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .textCase(.uppercase)
-                        .tracking(1)
-
-                    TextField("Goal name (e.g. New bike)", text: $kidGoalTitle)
-                        .kidCoinNameEntry()
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 13)
-                        .background(KidCoinTheme.muted)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    HStack {
-                        Text("Target points")
-                            .font(.subheadline)
-                            .foregroundStyle(KidCoinTheme.mutedText)
-                        Spacer()
-                        CounterControl(value: $kidGoalTargetPoints, range: 1...500)
-                    }
-
-                    let trimmed = kidGoalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                    Button {
-                        withAnimation(KidCoinMotion.list) {
-                            store.updateSavingsGoal(for: kid, title: trimmed, targetPoints: kidGoalTargetPoints)
-                        }
-                    } label: {
-                        Text(kid.savingsGoal == nil ? "Set goal" : "Update goal")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                            .background(trimmed.isEmpty ? KidCoinTheme.muted : KidCoinTheme.primary.opacity(0.15))
-                            .foregroundStyle(trimmed.isEmpty ? KidCoinTheme.mutedText : KidCoinTheme.primary)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
-                    .disabled(trimmed.isEmpty)
-                }
-
-                Divider().overlay(KidCoinTheme.border)
-
-                // Deposit to goal (direct)
                 HStack {
                     Text("Move to goal")
                         .font(.subheadline.weight(.semibold))
@@ -780,61 +686,40 @@ private struct ChildModeView: View {
                 }
 
                 Button {
+                    guard approvalEnabled else { return }
                     withAnimation(KidCoinMotion.list) {
-                        store.depositToGoalDirectly(points: goalDepositPoints, for: kid)
+                        store.requestGoalDeposit(points: goalDepositPoints, for: kid)
                     }
                     goalDepositPoints = 1
                 } label: {
-                    Text(kid.availablePoints == 0
-                         ? "No points to save"
-                         : "Save \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points") to goal")
+                    Text(goalDepositTitle)
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
-                        .background(kid.availablePoints == 0
+                        .background(goalDepositDisabled
                                     ? KidCoinTheme.muted
                                     : KidCoinTheme.primary.opacity(0.15))
-                        .foregroundStyle(kid.availablePoints == 0
+                        .foregroundStyle(goalDepositDisabled
                                          ? KidCoinTheme.mutedText
                                          : KidCoinTheme.primary)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
-                .disabled(kid.availablePoints == 0)
+                .disabled(goalDepositDisabled)
 
-                // Auto-save to goal
                 Divider().overlay(KidCoinTheme.border)
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Auto-save to goal")
                         .font(.subheadline.weight(.semibold))
-                    Text("Automatically move this % of every earn to goal.")
+                    Text(kid.autoGoalPercent == 0
+                         ? "Auto-save is off. A parent can turn it on in Vault settings."
+                         : "Auto-saving \(kid.autoGoalPercent)% of every earn to goal.")
                         .font(.caption)
                         .foregroundStyle(KidCoinTheme.mutedText)
-                    HStack(spacing: 8) {
-                        ForEach([0, 10, 25, 50], id: \.self) { pct in
-                            Button {
-                                store.setAutoGoalPercent(pct, for: kid)
-                            } label: {
-                                Text(pct == 0 ? "Off" : "\(pct)%")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 9)
-                                    .background(kid.autoGoalPercent == pct
-                                                ? KidCoinTheme.primary.opacity(0.18)
-                                                : KidCoinTheme.muted)
-                                    .foregroundStyle(kid.autoGoalPercent == pct
-                                                     ? KidCoinTheme.primary
-                                                     : KidCoinTheme.mutedText)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
-                        }
-                    }
                 }
 
-                // Cash out from goal (approval-gated — real money)
-                if kid.goalPoints > 0 && store.state.settings.approvalFlowEnabled {
+                if kid.goalPoints > 0 && approvalEnabled {
                     Divider().overlay(KidCoinTheme.border)
 
                     HStack {

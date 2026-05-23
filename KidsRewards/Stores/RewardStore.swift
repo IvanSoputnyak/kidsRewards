@@ -44,11 +44,16 @@ final class RewardStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
 
         if initialState == .empty,
-           let data = try? Data(contentsOf: self.fileURL),
-           let decoded = try? decoder.decode(RewardState.self, from: data) {
-            state = decoded
-            migrateLegacyParentPINIfNeeded()
-            runScheduledMaintenance()
+           FileManager.default.fileExists(atPath: self.fileURL.path) {
+            do {
+                let data = try Data(contentsOf: self.fileURL)
+                state = try decoder.decode(RewardState.self, from: data)
+                migrateLegacyParentPINIfNeeded()
+                runScheduledMaintenance()
+            } catch {
+                state = .empty
+                persistenceErrorMessage = "Could not load saved data: \(error.localizedDescription)"
+            }
         } else {
             state = initialState
             migrateLegacyParentPINIfNeeded()
@@ -96,6 +101,13 @@ final class RewardStore: ObservableObject {
               state.kids.contains(where: { allowancePoints(for: $0) > 0 }) else {
             return false
         }
+        if state.settings.approvalFlowEnabled,
+           !state.kids.contains(where: {
+               allowancePoints(for: $0) > 0 &&
+               pendingApprovalRequest(kind: .allowance, kidID: $0.id) == nil
+           }) {
+            return false
+        }
         return RecurrenceSchedule.allowanceIsDue(
             since: state.settings.lastAllowanceAppliedAt,
             recurrence: recurrence,
@@ -109,6 +121,13 @@ final class RewardStore: ObservableObject {
         let recurrence = state.settings.interestRecurrence
         guard recurrence != .none,
               state.kids.contains(where: { totalInterestPoints(for: $0) > 0 }) else {
+            return false
+        }
+        if state.settings.approvalFlowEnabled,
+           !state.kids.contains(where: {
+               totalInterestPoints(for: $0) > 0 &&
+               pendingApprovalRequest(kind: .interest, kidID: $0.id) == nil
+           }) {
             return false
         }
         if let lastApplied = state.settings.lastInterestAppliedAt,
@@ -656,7 +675,7 @@ final class RewardStore: ObservableObject {
         var corrected = transaction
         corrected.points = correctedPoints
         corrected.note = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? transaction.note : note.trimmingCharacters(in: .whitespacesAndNewlines)
-        if corrected.kind == .cashedOut {
+        if corrected.kind == .cashedOut || corrected.kind == .goalCashedOut {
             corrected.currencyAmount = Decimal(abs(correctedPoints)) * state.settings.currencyPerPoint
         }
 
@@ -1002,12 +1021,12 @@ final class RewardStore: ObservableObject {
             }
         case .choreCompleted:
             guard let taskID = currentRequest.taskID,
-                  let task = state.tasks.first(where: { $0.id == taskID }) else {
+                  let task = state.tasks.first(where: { $0.id == taskID }),
+                  task.isAssigned(to: kid.id),
+                  isTaskAvailable(task, for: kid) else {
                 return false
             }
-            let previousTransactionCount = state.transactions.count
-            award(task: task, to: kid)
-            didApply = state.transactions.count > previousTransactionCount
+            didApply = awardApprovedChore(task: task, request: currentRequest, to: kid)
         case .vaultDeposit:
             didApply = depositExact(points: currentRequest.points, for: kid)
         case .allowance:
@@ -1157,6 +1176,41 @@ final class RewardStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func awardApprovedChore(task: RewardTask, request: ApprovalRequest, to kid: Kid, at date: Date = Date()) -> Bool {
+        guard request.points > 0 else { return false }
+        var didAward = false
+        updateKid(kid.id) { current in
+            current.availablePoints += request.points
+            didAward = true
+        }
+        guard didAward else { return false }
+        addTransaction(
+            kidID: kid.id,
+            kind: .earned,
+            points: request.points,
+            note: approvedChoreNote(from: request, fallback: task.title),
+            currencyAmount: nil,
+            date: date
+        )
+        updateTaskCompletion(task, for: kid, at: date)
+        applyAutodeposit(earnedPoints: request.points, kidID: kid.id)
+        return true
+    }
+
+    private func approvedChoreNote(from request: ApprovalRequest, fallback: String) -> String {
+        let prefix = "Chore: "
+        if request.note.hasPrefix(prefix) {
+            let title = String(request.note.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                return title
+            }
+        }
+        let trimmed = request.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
     private func recordAllowanceScheduleApplied(at date: Date = Date()) {
         guard state.settings.allowanceRecurrence != .none else { return }
         state.settings.lastAllowanceAppliedAt = date
@@ -1212,9 +1266,10 @@ final class RewardStore: ObservableObject {
         guard points > 0 else { return false }
         var cashedOut = 0
         updateKid(kid.id) { current in
-            guard current.goalPoints >= points else { return }
-            cashedOut = points
-            current.goalPoints -= points
+            let amount = min(points, current.goalPoints)
+            guard amount > 0 else { return }
+            cashedOut = amount
+            current.goalPoints -= amount
         }
         guard cashedOut > 0 else { return false }
         addTransaction(
@@ -1226,36 +1281,6 @@ final class RewardStore: ObservableObject {
         )
         save()
         return true
-    }
-
-    func depositDirectly(points: Int, for kid: Kid) {
-        guard points > 0 else { return }
-        var depositedAmount = 0
-        updateKid(kid.id) { current in
-            let amount = min(points, current.availablePoints)
-            guard amount > 0 else { return }
-            depositedAmount = amount
-            current.availablePoints -= amount
-            current.vaultPoints += amount
-        }
-        guard depositedAmount > 0 else { return }
-        addTransaction(kidID: kid.id, kind: .deposited, points: depositedAmount, note: "Vault deposit", currencyAmount: nil)
-        save()
-    }
-
-    func depositToGoalDirectly(points: Int, for kid: Kid) {
-        guard points > 0 else { return }
-        var depositedAmount = 0
-        updateKid(kid.id) { current in
-            let amount = min(points, current.availablePoints)
-            guard amount > 0 else { return }
-            depositedAmount = amount
-            current.availablePoints -= amount
-            current.goalPoints += amount
-        }
-        guard depositedAmount > 0 else { return }
-        addTransaction(kidID: kid.id, kind: .goalDeposited, points: depositedAmount, note: "Goal deposit", currencyAmount: nil)
-        save()
     }
 
     func setAutoVaultPercent(_ percent: Int, for kid: Kid) {

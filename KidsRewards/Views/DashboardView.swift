@@ -248,13 +248,18 @@ struct DashboardView: View {
                 VStack(spacing: 10) {
                     ForEach(store.state.kids) { kid in
                         NavigationLink(value: kid) {
-                            DashboardKidCard(kid: kid, onEdit: {
-                                kidBeingEdited = kid
-                                editedKidName = kid.name
-                            })
+                            DashboardKidCard(kid: kid)
                         }
                         .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
                         .swipeActions {
+                            Button {
+                                kidBeingEdited = kid
+                                editedKidName = kid.name
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(KidCoinTheme.primary)
+
                             Button(role: .destructive) {
                                 kidPendingDeletion = kid
                             } label: {
@@ -535,7 +540,6 @@ private struct QuickActionChip: View {
 private struct DashboardKidCard: View {
     @EnvironmentObject private var store: RewardStore
     let kid: Kid
-    let onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -604,16 +608,9 @@ private struct DashboardKidCard: View {
 
             Spacer(minLength: 0)
 
-            Button(action: onEdit) {
-                Image(systemName: "pencil")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(KidCoinTheme.primary)
-                    .frame(width: 36, height: 36)
-                    .background(KidCoinTheme.primary.opacity(0.1))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Edit \(kid.name)")
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(KidCoinTheme.mutedText)
         }
         .padding(16)
         .tileCard(cornerRadius: 22)

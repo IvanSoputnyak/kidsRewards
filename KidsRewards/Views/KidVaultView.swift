@@ -32,6 +32,7 @@ struct KidVaultView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         vaultSummary(for: kid)
                         vaultSettingsSection()
+                        autoSaveSection(for: kid)
                         vaultActionsSection(for: kid)
                         goalSection(for: kid)
                         savingsGoalSection(for: kid)
@@ -191,6 +192,79 @@ struct KidVaultView: View {
                     }
                     goalTitle = ""
                     goalTargetPoints = 25
+                }
+            }
+            .padding(18)
+            .tileCard(cornerRadius: 26)
+        }
+    }
+
+    private func autoSaveSection(for kid: Kid) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel(title: "Auto-Save")
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Vault — % of each earn")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Moves this share of every earn or allowance directly to vault.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                    HStack(spacing: 8) {
+                        ForEach([0, 10, 25, 50], id: \.self) { pct in
+                            Button {
+                                store.setAutoVaultPercent(pct, for: kid)
+                            } label: {
+                                Text(pct == 0 ? "Off" : "\(pct)%")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 9)
+                                    .background(kid.autoVaultPercent == pct
+                                                ? KidCoinTheme.mint.opacity(0.35)
+                                                : KidCoinTheme.muted)
+                                    .foregroundStyle(kid.autoVaultPercent == pct
+                                                     ? KidCoinTheme.mintText
+                                                     : KidCoinTheme.mutedText)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
+                        }
+                    }
+                }
+
+                Divider().overlay(KidCoinTheme.border)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Goal — % of each earn")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Moves this share of every earn or allowance directly to goal.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                    HStack(spacing: 8) {
+                        ForEach([0, 10, 25, 50], id: \.self) { pct in
+                            Button {
+                                store.setAutoGoalPercent(pct, for: kid)
+                            } label: {
+                                Text(pct == 0 ? "Off" : "\(pct)%")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 9)
+                                    .background(kid.autoGoalPercent == pct
+                                                ? KidCoinTheme.primary.opacity(0.18)
+                                                : KidCoinTheme.muted)
+                                    .foregroundStyle(kid.autoGoalPercent == pct
+                                                     ? KidCoinTheme.primary
+                                                     : KidCoinTheme.mutedText)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(KidCoinPressButtonStyle(scale: 0.96))
+                        }
+                    }
+                }
+
+                if kid.autoVaultPercent + kid.autoGoalPercent > 100 {
+                    Text("Combined auto-save exceeds 100%. Goal will receive fewer points than set.")
+                        .font(.caption)
+                        .foregroundStyle(KidCoinTheme.destructive)
                 }
             }
             .padding(18)

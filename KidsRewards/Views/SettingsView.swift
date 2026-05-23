@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var showImportConfirmation = false
     @State private var showRestoreConfirmation = false
     @State private var importMessage = ""
+    @State private var approvalMessage = ""
 
     var body: some View {
         ScrollViewReader { scrollProxy in
@@ -136,12 +137,16 @@ struct SettingsView: View {
                                     currencyValue: store.currencyValue(for: request.points),
                                     onApprove: {
                                         withAnimation(KidCoinMotion.list) {
-                                            _ = store.approveRequest(request)
+                                            let didApprove = store.approveRequest(request)
+                                            approvalMessage = didApprove
+                                                ? ""
+                                                : "Could not approve request. The balance, chore, or schedule may have changed."
                                         }
                                     },
                                     onDecline: {
                                         withAnimation(KidCoinMotion.list) {
                                             store.declineRequest(request)
+                                            approvalMessage = ""
                                         }
                                     }
                                 )
@@ -149,6 +154,13 @@ struct SettingsView: View {
                             }
                         }
                         .animation(KidCoinMotion.list, value: store.state.approvalRequests)
+                    }
+
+                    if !approvalMessage.isEmpty {
+                        Text(approvalMessage)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(KidCoinTheme.destructive)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .id("approvalQueue")
