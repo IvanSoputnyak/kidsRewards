@@ -519,7 +519,7 @@ private struct ChildModeView: View {
     // MARK: - Vault section (always visible, direct deposit)
 
     private func kidVaultSection(for kid: Kid) -> some View {
-        let capped = min(depositPoints, max(kid.availablePoints, 1))
+        let capped = kid.availablePoints > 0 ? min(depositPoints, kid.availablePoints) : 0
         let projected = kid.vaultPoints + capped
 
         return VStack(alignment: .leading, spacing: 14) {
