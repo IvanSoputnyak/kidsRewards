@@ -114,31 +114,18 @@ struct KidDetailView: View {
                 .foregroundStyle(KidCoinTheme.foreground)
 
             HStack(spacing: 12) {
-                NavigationLink(value: KidAvailableRoute(kidID: kid.id)) {
-                    MetricTile(
-                        title: "Available",
-                        value: kid.availablePoints,
-                        systemImage: "star.fill",
-                        tone: .coral,
-                        showsDisclosure: true
-                    )
-                }
-                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
-                .accessibilityLabel("Available, \(kid.availablePoints) points")
-                .accessibilityHint("Opens cash out, adjustments, and allowance")
-
-                NavigationLink(value: KidVaultRoute(kidID: kid.id)) {
-                    MetricTile(
-                        title: "Vault",
-                        value: kid.vaultPoints,
-                        systemImage: "lock.fill",
-                        tone: .mint,
-                        showsDisclosure: true
-                    )
-                }
-                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
-                .accessibilityLabel("Vault, \(kid.vaultPoints) points")
-                .accessibilityHint("Opens vault and savings goal")
+                MetricTile(
+                    title: "Available",
+                    value: kid.availablePoints,
+                    systemImage: "star.fill",
+                    tone: .coral
+                )
+                MetricTile(
+                    title: "Vault",
+                    value: kid.vaultPoints,
+                    systemImage: "lock.fill",
+                    tone: .mint
+                )
             }
 
             Text("Cash value: \(Formatters.currency(store.currencyValue(for: kid.availablePoints), code: store.state.settings.currencyCode))")

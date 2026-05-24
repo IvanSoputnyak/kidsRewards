@@ -270,13 +270,6 @@ private struct ChildModeView: View {
 
                     if store.state.settings.approvalFlowEnabled {
                         moneySection(for: kid)
-                    } else {
-                        Text("Ask a parent to turn on approval flow in Settings to submit chore and money requests.")
-                            .font(.caption)
-                            .foregroundStyle(KidCoinTheme.mutedText)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 28)
-                            .padding(.top, 20)
                     }
 
                     historySection(for: kid)
@@ -493,31 +486,41 @@ private struct ChildModeView: View {
                 .padding(.horizontal, 20)
             }
 
-            Text("Tap a chore to ask Mom or Dad to check your work")
-                .font(.subheadline)
-                .foregroundStyle(KidCoinTheme.mutedText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 20)
+            if store.state.settings.approvalFlowEnabled {
+                Text("Tap a chore to ask Mom or Dad to check your work.")
+                    .font(.subheadline)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
+            } else {
+                Text("Chore check-ins and cash out need approval flow turned on in Settings. You can still save points to vault and goal below.")
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
+            }
         }
         .padding(.top, 26)
     }
 
-    // MARK: - Vault section (always visible, direct deposit)
+    // MARK: - Vault section (save available → vault; always works for kids)
 
     private func kidVaultSection(for kid: Kid) -> some View {
         let capped = kid.availablePoints > 0 ? min(depositPoints, kid.availablePoints) : 0
         let projected = kid.vaultPoints + capped
         let approvalEnabled = store.state.settings.approvalFlowEnabled
-        let vaultDepositPending = store.pendingApprovalRequest(kind: .vaultDeposit, kidID: kid.id) != nil
-        let vaultDepositDisabled = !approvalEnabled || kid.availablePoints == 0 || vaultDepositPending
-        let vaultDepositTitle = !approvalEnabled
-            ? "Ask a parent to enable requests"
-            : vaultDepositPending
-                ? "Vault save pending"
-                : kid.availablePoints == 0
-                    ? "No points to save"
-                    : "Request save \(depositPoints) \(depositPoints == 1 ? "point" : "points") to vault"
+        let vaultDepositPending = approvalEnabled
+            && store.pendingApprovalRequest(kind: .vaultDeposit, kidID: kid.id) != nil
+        let vaultDepositDisabled = kid.availablePoints == 0 || vaultDepositPending
+        let vaultDepositTitle = vaultDepositPending
+            ? "Vault save pending"
+            : kid.availablePoints == 0
+                ? "No points to save"
+                : approvalEnabled
+                    ? "Request save \(depositPoints) \(depositPoints == 1 ? "point" : "points") to vault"
+                    : "Save \(depositPoints) \(depositPoints == 1 ? "point" : "points") to vault"
 
         return VStack(alignment: .leading, spacing: 14) {
             Text("Vault")
@@ -559,9 +562,8 @@ private struct ChildModeView: View {
                     .animation(KidCoinMotion.gentle, value: projected)
 
                 Button {
-                    guard approvalEnabled else { return }
                     withAnimation(KidCoinMotion.list) {
-                        store.requestDeposit(points: depositPoints, for: kid)
+                        _ = store.deposit(points: depositPoints, for: kid)
                     }
                     depositPoints = 1
                 } label: {
@@ -615,16 +617,18 @@ private struct ChildModeView: View {
 
     private func kidGoalSection(for kid: Kid) -> some View {
         let approvalEnabled = store.state.settings.approvalFlowEnabled
-        let goalDepositPending = store.pendingApprovalRequest(kind: .goalDeposit, kidID: kid.id) != nil
-        let goalCashOutPending = store.pendingApprovalRequest(kind: .goalCashOut, kidID: kid.id) != nil
-        let goalDepositDisabled = !approvalEnabled || kid.availablePoints == 0 || goalDepositPending
-        let goalDepositTitle = !approvalEnabled
-            ? "Ask a parent to enable requests"
-            : goalDepositPending
-                ? "Goal save pending"
-                : kid.availablePoints == 0
-                    ? "No points to save"
-                    : "Request save \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points") to goal"
+        let goalDepositPending = approvalEnabled
+            && store.pendingApprovalRequest(kind: .goalDeposit, kidID: kid.id) != nil
+        let goalCashOutPending = approvalEnabled
+            && store.pendingApprovalRequest(kind: .goalCashOut, kidID: kid.id) != nil
+        let goalDepositDisabled = kid.availablePoints == 0 || goalDepositPending
+        let goalDepositTitle = goalDepositPending
+            ? "Goal save pending"
+            : kid.availablePoints == 0
+                ? "No points to save"
+                : approvalEnabled
+                    ? "Request save \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points") to goal"
+                    : "Save \(goalDepositPoints) \(goalDepositPoints == 1 ? "point" : "points") to goal"
 
         return VStack(alignment: .leading, spacing: 14) {
             Text("Goal")
@@ -651,7 +655,7 @@ private struct ChildModeView: View {
                             .animation(KidCoinMotion.gentle, value: progress)
                     }
                 } else {
-                    Text("Ask a parent to set a savings goal.")
+                    Text("A parent can name your goal and target in Vault settings. You can still save points to goal below.")
                         .font(.caption)
                         .foregroundStyle(KidCoinTheme.mutedText)
                 }
@@ -686,9 +690,8 @@ private struct ChildModeView: View {
                 }
 
                 Button {
-                    guard approvalEnabled else { return }
                     withAnimation(KidCoinMotion.list) {
-                        store.requestGoalDeposit(points: goalDepositPoints, for: kid)
+                        _ = store.depositToGoal(points: goalDepositPoints, for: kid)
                     }
                     goalDepositPoints = 1
                 } label: {

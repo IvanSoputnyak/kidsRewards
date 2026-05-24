@@ -7,6 +7,8 @@ struct KidAvailableRoute: Hashable {
 struct KidAvailableView: View {
     @EnvironmentObject private var store: RewardStore
     let kidID: UUID
+    /// When embedded in `HouseholdAvailableView`, the parent owns the navigation title.
+    var embeddedInHousehold = false
 
     @State private var cashOutPoints = 1
     @State private var adjustmentPoints = 1
@@ -38,8 +40,9 @@ struct KidAvailableView: View {
                 }
                 .kidCoinScroll()
                 .kidCoinBackground()
-                .navigationTitle("Available")
+                .navigationTitle(embeddedInHousehold ? "" : "Available")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(embeddedInHousehold ? .hidden : .automatic, for: .navigationBar)
                 .tint(KidCoinTheme.primary)
                 .onAppear(perform: loadAllowanceSettings)
                 .confirmationDialog(

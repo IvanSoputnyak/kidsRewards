@@ -7,6 +7,7 @@ struct KidVaultRoute: Hashable {
 struct KidVaultView: View {
     @EnvironmentObject private var store: RewardStore
     let kidID: UUID
+    var embeddedInHousehold = false
 
     @State private var depositPoints = 1
     @State private var withdrawPoints = 1
@@ -42,8 +43,9 @@ struct KidVaultView: View {
                 }
                 .kidCoinScroll()
                 .kidCoinBackground()
-                .navigationTitle("Vault")
+                .navigationTitle(embeddedInHousehold ? "" : "Vault")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(embeddedInHousehold ? .hidden : .automatic, for: .navigationBar)
                 .tint(KidCoinTheme.primary)
                 .onAppear {
                     syncGoalFields(from: kid)

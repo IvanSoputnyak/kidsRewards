@@ -50,11 +50,11 @@ struct DashboardView: View {
             .navigationDestination(for: Kid.self) { kid in
                 KidDetailView(kidID: kid.id)
             }
-            .navigationDestination(for: KidVaultRoute.self) { route in
-                KidVaultView(kidID: route.kidID)
+            .navigationDestination(for: HouseholdAvailableRoute.self) { route in
+                HouseholdAvailableView(initialKidID: route.initialKidID)
             }
-            .navigationDestination(for: KidAvailableRoute.self) { route in
-                KidAvailableView(kidID: route.kidID)
+            .navigationDestination(for: HouseholdVaultRoute.self) { route in
+                HouseholdVaultView(initialKidID: route.initialKidID)
             }
             .confirmationDialog(
                 deletionTitle,
@@ -144,8 +144,29 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel(title: "Household")
             HStack(spacing: 12) {
-                MetricTile(title: "Available", value: store.totalAvailablePoints, tone: .coral)
-                MetricTile(title: "Vault", value: store.totalVaultPoints, tone: .mint)
+                NavigationLink(value: HouseholdAvailableRoute()) {
+                    MetricTile(
+                        title: "Available",
+                        value: store.totalAvailablePoints,
+                        tone: .coral,
+                        showsDisclosure: true
+                    )
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
+                .accessibilityLabel("Available points, \(store.totalAvailablePoints) total")
+                .accessibilityHint("Opens cash out and adjustments for each kid")
+
+                NavigationLink(value: HouseholdVaultRoute()) {
+                    MetricTile(
+                        title: "Vault",
+                        value: store.totalVaultPoints,
+                        tone: .mint,
+                        showsDisclosure: true
+                    )
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
+                .accessibilityLabel("Vault points, \(store.totalVaultPoints) total")
+                .accessibilityHint("Opens vault, savings goals, and interest for each kid")
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Total value: \(Formatters.currency(store.currencyValue(for: store.totalHouseholdPoints), code: store.state.settings.currencyCode))")
@@ -247,10 +268,7 @@ struct DashboardView: View {
             } else {
                 VStack(spacing: 10) {
                     ForEach(store.state.kids) { kid in
-                        NavigationLink(value: kid) {
-                            DashboardKidCard(kid: kid)
-                        }
-                        .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
+                        DashboardKidCard(kid: kid)
                         .swipeActions {
                             Button {
                                 kidBeingEdited = kid
@@ -435,7 +453,7 @@ struct DashboardView: View {
 
     private func openVaultForScheduledInterest() {
         guard let kid = store.firstKidEligibleForVaultInterest() else { return }
-        navigationPath.append(KidVaultRoute(kidID: kid.id))
+        navigationPath.append(HouseholdVaultRoute(initialKidID: kid.id))
     }
 }
 
@@ -542,78 +560,153 @@ private struct DashboardKidCard: View {
     let kid: Kid
 
     var body: some View {
-        HStack(spacing: 14) {
-            Text(String(kid.name.prefix(1)).uppercased())
-                .font(.system(.title3, design: .rounded).weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(
-                    LinearGradient(
-                        colors: [KidCoinTheme.sunshine, KidCoinTheme.primary.opacity(0.82)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(Circle())
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                NavigationLink(value: kid) {
+                    HStack(spacing: 14) {
+                        Text(String(kid.name.prefix(1)).uppercased())
+                            .font(.system(.title3, design: .rounded).weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(
+                                LinearGradient(
+                                    colors: [KidCoinTheme.sunshine, KidCoinTheme.primary.opacity(0.82)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .clipShape(Circle())
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(kid.name)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(KidCoinTheme.foreground)
-                    if store.pendingRequestCount(for: kid) > 0 {
-                        Text("Pending")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(KidCoinTheme.primary.opacity(0.14))
-                            .foregroundStyle(KidCoinTheme.primary)
-                            .clipShape(Capsule())
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(kid.name)
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(KidCoinTheme.foreground)
+                                if store.pendingRequestCount(for: kid) > 0 {
+                                    Text("Pending")
+                                        .font(.caption2.weight(.bold))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(KidCoinTheme.primary.opacity(0.14))
+                                        .foregroundStyle(KidCoinTheme.primary)
+                                        .clipShape(Capsule())
+                                }
+                            }
+
+                            if let goal = kid.savingsGoal {
+                                let progress = store.savingsGoalProgress(for: kid)
+                                Text("\(goal.title): \(progress)/\(goal.targetPoints) toward goal")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(KidCoinTheme.mintText)
+                            }
+
+                            if let activity = store.lastActivitySummary(for: kid) {
+                                Text(activity)
+                                    .font(.caption2)
+                                    .foregroundStyle(KidCoinTheme.mutedText)
+                                    .lineLimit(1)
+                            }
+
+                            let ready = store.readyChoreCount(for: kid)
+                            if ready > 0 {
+                                Text("\(ready) chore\(ready == 1 ? "" : "s") ready to award")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(KidCoinTheme.primary)
+                            }
+
+                            Text("Award work & history")
+                                .font(.caption2)
+                                .foregroundStyle(KidCoinTheme.mutedText)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(KidCoinTheme.mutedText)
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Label("\(kid.availablePoints) available", systemImage: "star.fill")
-                        .foregroundStyle(KidCoinTheme.primary)
-                        .contentTransition(.numericText())
-                    Label("\(kid.vaultPoints) vault", systemImage: "lock.fill")
-                        .foregroundStyle(KidCoinTheme.mintText)
-                        .contentTransition(.numericText())
-                }
-                .font(.caption)
-                .animation(KidCoinMotion.gentle, value: kid.availablePoints)
-                .animation(KidCoinMotion.gentle, value: kid.vaultPoints)
-
-                if let goal = kid.savingsGoal {
-                    let progress = store.savingsGoalProgress(for: kid)
-                    Text("\(goal.title): \(progress)/\(goal.targetPoints) toward goal")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(KidCoinTheme.mintText)
-                }
-
-                if let activity = store.lastActivitySummary(for: kid) {
-                    Text(activity)
-                        .font(.caption2)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                        .lineLimit(1)
-                }
-
-                let ready = store.readyChoreCount(for: kid)
-                if ready > 0 {
-                    Text("\(ready) chore\(ready == 1 ? "" : "s") ready to award")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(KidCoinTheme.primary)
-                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
+                .accessibilityLabel("\(kid.name), award work and history")
             }
 
-            Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                NavigationLink(value: HouseholdAvailableRoute(initialKidID: kid.id)) {
+                    KidBalanceChip(
+                        title: "Available",
+                        points: kid.availablePoints,
+                        systemImage: "star.fill",
+                        tone: .coral
+                    )
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
 
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(KidCoinTheme.mutedText)
+                NavigationLink(value: HouseholdVaultRoute(initialKidID: kid.id)) {
+                    KidBalanceChip(
+                        title: "Vault",
+                        points: kid.vaultPoints,
+                        systemImage: "lock.fill",
+                        tone: .mint
+                    )
+                }
+                .buttonStyle(KidCoinPressButtonStyle(scale: 0.985))
+            }
         }
         .padding(16)
         .tileCard(cornerRadius: 22)
+    }
+}
+
+private struct KidBalanceChip: View {
+    enum Tone {
+        case coral
+        case mint
+    }
+
+    let title: String
+    let points: Int
+    let systemImage: String
+    let tone: Tone
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.bold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                Text("\(points)")
+                    .font(.subheadline.weight(.bold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold))
+                .opacity(0.7)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .foregroundStyle(foreground)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(points) points")
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .coral: KidCoinTheme.primary
+        case .mint: KidCoinTheme.mintText
+        }
+    }
+
+    private var background: Color {
+        switch tone {
+        case .coral: KidCoinTheme.primary.opacity(0.1)
+        case .mint: KidCoinTheme.mint.opacity(0.22)
+        }
     }
 }
 
