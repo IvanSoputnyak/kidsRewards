@@ -231,6 +231,9 @@ private struct ChildModeView: View {
     @State private var goalDepositPoints = 1
     @State private var cashOutPoints = 1
     @State private var goalCashOutPoints = 1
+    @State private var childGoalTitle = ""
+    @State private var childGoalTargetPoints = 25
+    @State private var isEditingChildGoal = false
 
     private var selectedKid: Kid? {
         if let selectedKidID,
@@ -283,10 +286,12 @@ private struct ChildModeView: View {
             if selectedKidID == nil {
                 selectedKidID = store.state.kids.first?.id
             }
+            syncChildGoalFields()
         }
         .onChange(of: store.state.kids.map(\.id)) { _, kidIDs in
             guard let selectedKidID, kidIDs.contains(selectedKidID) else {
                 self.selectedKidID = kidIDs.first
+                syncChildGoalFields()
                 return
             }
         }
@@ -296,6 +301,11 @@ private struct ChildModeView: View {
             cashOutPoints = 1
             goalCashOutPoints = 1
             isHistoryExpanded = false
+            isEditingChildGoal = false
+            syncChildGoalFields()
+        }
+        .onChange(of: selectedKid?.savingsGoal?.targetPoints) { _, _ in
+            syncChildGoalFields()
         }
         .onChange(of: selectedKid?.availablePoints) { _, newAvail in
             let cap = max(newAvail ?? 1, 1)
@@ -613,6 +623,21 @@ private struct ChildModeView: View {
         .padding(.top, 22)
     }
 
+    private func syncChildGoalFields() {
+        guard let kid = selectedKid else {
+            childGoalTitle = ""
+            childGoalTargetPoints = 25
+            return
+        }
+        if let goal = kid.savingsGoal, !isEditingChildGoal {
+            childGoalTitle = goal.title
+            childGoalTargetPoints = goal.targetPoints
+        } else if kid.savingsGoal == nil {
+            childGoalTitle = ""
+            childGoalTargetPoints = 25
+        }
+    }
+
     // MARK: - Goal section
 
     private func kidGoalSection(for kid: Kid) -> some View {
@@ -636,29 +661,7 @@ private struct ChildModeView: View {
                 .padding(.horizontal, 20)
 
             VStack(alignment: .leading, spacing: 14) {
-                // Balance + progress
-                if let goal = kid.savingsGoal {
-                    let progress = store.savingsGoalProgress(for: kid)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(goal.title)
-                                    .font(.headline.weight(.bold))
-                                Text("\(progress) of \(goal.targetPoints) pts")
-                                    .font(.caption)
-                                    .foregroundStyle(KidCoinTheme.mutedText)
-                            }
-                            Spacer()
-                        }
-                        ProgressView(value: Double(min(progress, goal.targetPoints)), total: Double(goal.targetPoints))
-                            .tint(KidCoinTheme.primary)
-                            .animation(KidCoinMotion.gentle, value: progress)
-                    }
-                } else {
-                    Text("A parent can name your goal and target in Vault settings. You can still save points to goal below.")
-                        .font(.caption)
-                        .foregroundStyle(KidCoinTheme.mutedText)
-                }
+                childGoalDefinitionSection(for: kid)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(kid.goalPoints)")
@@ -759,6 +762,106 @@ private struct ChildModeView: View {
             .padding(.horizontal, 20)
         }
         .padding(.top, 22)
+    }
+
+    @ViewBuilder
+    private func childGoalDefinitionSection(for kid: Kid) -> some View {
+        if let goal = kid.savingsGoal, !isEditingChildGoal {
+            let progress = store.savingsGoalProgress(for: kid)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(goal.title)
+                            .font(.headline.weight(.bold))
+                        Text("\(progress) of \(goal.targetPoints) pts saved")
+                            .font(.caption)
+                            .foregroundStyle(KidCoinTheme.mutedText)
+                    }
+                    Spacer()
+                    Button("Change") {
+                        childGoalTitle = goal.title
+                        childGoalTargetPoints = goal.targetPoints
+                        withAnimation(KidCoinMotion.gentle) {
+                            isEditingChildGoal = true
+                        }
+                    }
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(KidCoinTheme.primary)
+                }
+                ProgressView(
+                    value: Double(min(progress, goal.targetPoints)),
+                    total: Double(goal.targetPoints)
+                )
+                .tint(KidCoinTheme.primary)
+                .animation(KidCoinMotion.gentle, value: progress)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(kid.savingsGoal == nil
+                     ? "Pick something to save for, then move points here."
+                     : "Update your goal name or target.")
+                    .font(.caption)
+                    .foregroundStyle(KidCoinTheme.mutedText)
+
+                TextField("Goal name, e.g. New bike", text: $childGoalTitle)
+                    .kidCoinNameEntry()
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .background(KidCoinTheme.muted)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                HStack {
+                    Text("Target points")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    CounterControl(value: $childGoalTargetPoints, range: 1...500)
+                }
+
+                HStack(spacing: 10) {
+                    if kid.savingsGoal != nil {
+                        Button("Cancel") {
+                            withAnimation(KidCoinMotion.gentle) {
+                                isEditingChildGoal = false
+                                syncChildGoalFields()
+                            }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(KidCoinTheme.mutedText)
+                    }
+
+                    Button {
+                        withAnimation(KidCoinMotion.list) {
+                            store.updateSavingsGoal(
+                                for: kid,
+                                title: childGoalTitle,
+                                targetPoints: childGoalTargetPoints
+                            )
+                            isEditingChildGoal = false
+                            syncChildGoalFields()
+                        }
+                    } label: {
+                        Text(kid.savingsGoal == nil && !isEditingChildGoal ? "Set my goal" : "Save goal")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                childGoalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? KidCoinTheme.muted
+                                    : KidCoinTheme.primary.opacity(0.15)
+                            )
+                            .foregroundStyle(
+                                childGoalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? KidCoinTheme.mutedText
+                                    : KidCoinTheme.primary
+                            )
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(KidCoinPressButtonStyle(scale: 0.97))
+                    .disabled(childGoalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 
     // MARK: - Money section

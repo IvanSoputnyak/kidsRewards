@@ -128,6 +128,11 @@ struct KidVaultView: View {
     private func savingsGoalSection(for kid: Kid) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel(title: "Savings Goal")
+            Text("Kids can set their own goal in child mode. You can update or clear it here.")
+                .font(.caption)
+                .foregroundStyle(KidCoinTheme.mutedText)
+                .lineSpacing(2)
+                .padding(.horizontal, 4)
             VStack(alignment: .leading, spacing: 14) {
                 if let goal = kid.savingsGoal {
                     HStack {
