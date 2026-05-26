@@ -224,6 +224,7 @@ private struct ParentPINGate: View {
 private struct ChildModeView: View {
     @EnvironmentObject private var store: RewardStore
     let onExit: () -> Void
+    private let historyLimit = 10
 
     @State private var selectedKidID: UUID?
     @State private var isHistoryExpanded = false
@@ -1002,7 +1003,7 @@ private struct ChildModeView: View {
                         .padding(.vertical, 8)
                 } else {
                     VStack(spacing: 8) {
-                        ForEach(Array(txns.prefix(10))) { txn in
+                        ForEach(Array(txns.prefix(historyLimit))) { txn in
                             RewardTransactionRow(
                                 transaction: txn,
                                 currencyCode: store.state.settings.currencyCode,

@@ -8,12 +8,49 @@ struct HouseholdVaultRoute: Hashable {
     var initialKidID: UUID?
 }
 
+@MainActor
+private final class KidSelectionState: ObservableObject {
+    @Published var selectedKidID: UUID?
+    private let initialKidID: UUID?
+
+    init(initialKidID: UUID?) {
+        self.initialKidID = initialKidID
+    }
+
+    func resolvedKidID(in kids: [Kid]) -> UUID? {
+        if let selectedKidID, kids.contains(where: { $0.id == selectedKidID }) {
+            return selectedKidID
+        }
+        if let initialKidID, kids.contains(where: { $0.id == initialKidID }) {
+            return initialKidID
+        }
+        return kids.first?.id
+    }
+
+    func sync(with kids: [Kid]) {
+        guard !kids.isEmpty else {
+            selectedKidID = nil
+            return
+        }
+        if let selectedKidID, kids.contains(where: { $0.id == selectedKidID }) {
+            return
+        }
+        if let initialKidID, kids.contains(where: { $0.id == initialKidID }) {
+            selectedKidID = initialKidID
+            return
+        }
+        selectedKidID = kids.first?.id
+    }
+}
+
 /// Household entry for available points — pick a kid, then cash out / adjust (allowance settings are global on each screen).
 struct HouseholdAvailableView: View {
     @EnvironmentObject private var store: RewardStore
-    let initialKidID: UUID?
+    @StateObject private var selection: KidSelectionState
 
-    @State private var selectedKidID: UUID?
+    init(initialKidID: UUID?) {
+        _selection = StateObject(wrappedValue: KidSelectionState(initialKidID: initialKidID))
+    }
 
     var body: some View {
         Group {
@@ -24,13 +61,13 @@ struct HouseholdAvailableView: View {
                     description: Text("Add a kid from the household screen first.")
                 )
                 .kidCoinBackground()
-            } else if let kidID = resolvedKidID {
+            } else if let kidID = selection.resolvedKidID(in: store.state.kids) {
                 VStack(spacing: 0) {
                     KidPickerBar(
                         kids: store.state.kids,
                         selectedKidID: Binding(
-                            get: { selectedKidID ?? kidID },
-                            set: { selectedKidID = $0 }
+                            get: { selection.selectedKidID ?? kidID },
+                            set: { selection.selectedKidID = $0 }
                         )
                     )
                     .padding(.horizontal, 20)
@@ -43,48 +80,21 @@ struct HouseholdAvailableView: View {
         }
         .navigationTitle("Available")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: syncSelectedKid)
+        .onAppear { selection.sync(with: store.state.kids) }
         .onChange(of: store.state.kids.map(\.id)) { _, _ in
-            syncSelectedKid()
+            selection.sync(with: store.state.kids)
         }
-    }
-
-    private var resolvedKidID: UUID? {
-        if let selectedKidID,
-           store.state.kids.contains(where: { $0.id == selectedKidID }) {
-            return selectedKidID
-        }
-        if let initialKidID,
-           store.state.kids.contains(where: { $0.id == initialKidID }) {
-            return initialKidID
-        }
-        return store.state.kids.first?.id
-    }
-
-    private func syncSelectedKid() {
-        guard !store.state.kids.isEmpty else {
-            selectedKidID = nil
-            return
-        }
-        if let selectedKidID,
-           store.state.kids.contains(where: { $0.id == selectedKidID }) {
-            return
-        }
-        if let initialKidID,
-           store.state.kids.contains(where: { $0.id == initialKidID }) {
-            selectedKidID = initialKidID
-            return
-        }
-        selectedKidID = store.state.kids.first?.id
     }
 }
 
 /// Household entry for vault — pick a kid, then deposit / withdraw / goals (vault rate & schedule are household-wide).
 struct HouseholdVaultView: View {
     @EnvironmentObject private var store: RewardStore
-    let initialKidID: UUID?
+    @StateObject private var selection: KidSelectionState
 
-    @State private var selectedKidID: UUID?
+    init(initialKidID: UUID?) {
+        _selection = StateObject(wrappedValue: KidSelectionState(initialKidID: initialKidID))
+    }
 
     var body: some View {
         Group {
@@ -95,13 +105,13 @@ struct HouseholdVaultView: View {
                     description: Text("Add a kid from the household screen first.")
                 )
                 .kidCoinBackground()
-            } else if let kidID = resolvedKidID {
+            } else if let kidID = selection.resolvedKidID(in: store.state.kids) {
                 VStack(spacing: 0) {
                     KidPickerBar(
                         kids: store.state.kids,
                         selectedKidID: Binding(
-                            get: { selectedKidID ?? kidID },
-                            set: { selectedKidID = $0 }
+                            get: { selection.selectedKidID ?? kidID },
+                            set: { selection.selectedKidID = $0 }
                         )
                     )
                     .padding(.horizontal, 20)
@@ -114,39 +124,10 @@ struct HouseholdVaultView: View {
         }
         .navigationTitle("Vault")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: syncSelectedKid)
+        .onAppear { selection.sync(with: store.state.kids) }
         .onChange(of: store.state.kids.map(\.id)) { _, _ in
-            syncSelectedKid()
+            selection.sync(with: store.state.kids)
         }
-    }
-
-    private var resolvedKidID: UUID? {
-        if let selectedKidID,
-           store.state.kids.contains(where: { $0.id == selectedKidID }) {
-            return selectedKidID
-        }
-        if let initialKidID,
-           store.state.kids.contains(where: { $0.id == initialKidID }) {
-            return initialKidID
-        }
-        return store.state.kids.first?.id
-    }
-
-    private func syncSelectedKid() {
-        guard !store.state.kids.isEmpty else {
-            selectedKidID = nil
-            return
-        }
-        if let selectedKidID,
-           store.state.kids.contains(where: { $0.id == selectedKidID }) {
-            return
-        }
-        if let initialKidID,
-           store.state.kids.contains(where: { $0.id == initialKidID }) {
-            selectedKidID = initialKidID
-            return
-        }
-        selectedKidID = store.state.kids.first?.id
     }
 }
 

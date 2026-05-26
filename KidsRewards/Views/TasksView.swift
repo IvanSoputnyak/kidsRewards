@@ -1,5 +1,7 @@
 import SwiftUI
 
+private let maxTaskPoints = 100
+
 struct TasksView: View {
     @EnvironmentObject private var store: RewardStore
     @State private var title = ""
@@ -91,7 +93,7 @@ struct TasksView: View {
                     .font(.subheadline)
                     .foregroundStyle(KidCoinTheme.mutedText)
                 Spacer()
-                CounterControl(value: $points, range: 1...100)
+                CounterControl(value: $points, range: 1...maxTaskPoints)
             }
 
             SegmentedPickerRow(
@@ -351,7 +353,7 @@ private struct EditTaskModal: View {
                         .font(.subheadline)
                         .foregroundStyle(KidCoinTheme.mutedText)
                     Spacer()
-                    CounterControl(value: $points, range: 1...100)
+                    CounterControl(value: $points, range: 1...maxTaskPoints)
                 }
 
                 SegmentedPickerRow(

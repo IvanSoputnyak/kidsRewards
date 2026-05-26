@@ -10,7 +10,7 @@ struct DashboardView: View {
     @State private var editedKidName = ""
     @State private var allowanceAppliedMessage = ""
     @State private var navigationPath = NavigationPath()
-    @State private var activityVisibleCount = 5
+    @State private var activityVisibleCount = DashboardView.activityInitialCount
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -291,8 +291,8 @@ struct DashboardView: View {
         }
     }
 
-    private let activityPageSize = 10
-    private let activityInitialCount = 5
+    private static let activityPageSize = 10
+    private static let activityInitialCount = 5
 
     @ViewBuilder
     private var recentActivitySection: some View {
@@ -334,11 +334,11 @@ struct DashboardView: View {
                     if hasMore {
                         Button {
                             withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                                activityVisibleCount += activityPageSize
+                                activityVisibleCount += Self.activityPageSize
                             }
                         } label: {
                             HStack(spacing: 5) {
-                                Text("Show \(min(activityPageSize, total - activityVisibleCount)) more")
+                                Text("Show \(min(Self.activityPageSize, total - activityVisibleCount)) more")
                                     .font(.caption.weight(.semibold))
                                 Image(systemName: "chevron.down")
                                     .font(.caption2.weight(.bold))
@@ -439,9 +439,21 @@ struct DashboardView: View {
             } else {
                 allowanceAppliedMessage = "Allowance could not be applied right now."
             }
+        } else if allowanceRequestsAlreadyPending() {
+            allowanceAppliedMessage = "Allowance requests are already in the approval queue."
         } else {
             store.applyAllowanceToAllKids()
             allowanceAppliedMessage = "Allowance was applied to all kids."
+        }
+    }
+
+    private func allowanceRequestsAlreadyPending() -> Bool {
+        guard store.state.settings.approvalFlowEnabled,
+              store.state.settings.allowanceRecurrence != .none else { return false }
+        let eligible = store.state.kids.filter { store.allowancePoints(for: $0) > 0 }
+        guard !eligible.isEmpty else { return false }
+        return eligible.allSatisfy {
+            store.pendingApprovalRequest(kind: .allowance, kidID: $0.id) != nil
         }
     }
 

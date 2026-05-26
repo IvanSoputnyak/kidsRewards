@@ -157,7 +157,7 @@ final class RewardStore: ObservableObject {
         state.approvalRequests.filter { $0.kidID == kid.id }.count
     }
 
-    func recentTransactions(limit: Int = 8, now: Date = Date()) -> [RewardTransaction] {
+    func recentTransactions(limit: Int = 8) -> [RewardTransaction] {
         let capped = max(limit, 0)
         guard capped > 0 else { return [] }
         return Array(
@@ -177,8 +177,7 @@ final class RewardStore: ObservableObject {
         }
     }
 
-    func earnedPointsThisWeek(now: Date = Date()) -> Int {
-        let calendar = Calendar.current
+    func earnedPointsThisWeek(now: Date = Date(), calendar: Calendar = .current) -> Int {
         guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start else {
             return 0
         }

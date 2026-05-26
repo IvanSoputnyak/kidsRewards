@@ -360,19 +360,23 @@ struct KidVaultView: View {
                     items: RewardTask.Recurrence.allCases,
                     label: \.label
                 )
-                .onChange(of: interestRecurrence) { _, newValue in
-                    store.setInterestRecurrence(newValue)
-                }
-
                 Text(interestScheduleText)
                     .font(.caption)
                     .foregroundStyle(KidCoinTheme.mutedText)
                     .lineSpacing(2)
 
-                if interestRateText != Formatters.decimalInput(store.state.settings.vaultInterestRate) {
-                    Text("Unsaved changes")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                let rateChanged = interestRateText != Formatters.decimalInput(store.state.settings.vaultInterestRate)
+                let recurrenceChanged = interestRecurrence != store.state.settings.interestRecurrence
+                if rateChanged || recurrenceChanged {
+                    if rateChanged && Formatters.parseDecimal(interestRateText) == nil {
+                        Text("Invalid rate — enter a decimal like 0.05")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Unsaved changes")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
                 PillButton(title: "Save Interest Settings", systemImage: "checkmark", tone: .subtle) {
                     saveVaultSettings()
@@ -494,6 +498,7 @@ struct KidVaultView: View {
         if let rate = Formatters.parseDecimal(interestRateText) {
             store.setVaultInterestRate(rate)
         }
+        store.setInterestRecurrence(interestRecurrence)
     }
 
     private var interestScheduleText: String {

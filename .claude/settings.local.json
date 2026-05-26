@@ -20,7 +20,8 @@
       "Bash(xcodebuild -scheme KidsRewards -destination \"platform=iOS Simulator,name=iPhone 16\" -quiet build)",
       "Bash(xcodebuild -scheme KidsRewards -destination \"platform=iOS Simulator,name=iPhone 17\" build)",
       "Bash(xcodebuild -scheme KidsRewards -destination 'platform=iOS Simulator,name=iPhone 17' build)",
-      "Read(//Users/ivansoputnak/.claude/**)"
+      "Read(//Users/ivansoputnak/.claude/**)",
+      "Bash(xcodebuild test-without-building *)"
     ]
   }
 }

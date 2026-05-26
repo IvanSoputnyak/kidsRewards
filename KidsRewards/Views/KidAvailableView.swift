@@ -295,11 +295,15 @@ struct KidAvailableView: View {
         }
     }
 
+    private static let weekdayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        return f
+    }()
+
     private func weekdayName(_ weekday: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = .current
         guard weekday >= 1, weekday <= 7 else { return "" }
-        return formatter.weekdaySymbols[weekday - 1]
+        return Self.weekdayFormatter.weekdaySymbols[weekday - 1]
     }
 
     private func ordinalSuffix(for day: Int) -> String {

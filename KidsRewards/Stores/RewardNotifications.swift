@@ -13,7 +13,7 @@ enum RewardNotifications {
     static let interestIdentifier = "kidsrewards.interest"
     static let approvalsIdentifier = "kidsrewards.approvals"
 
-    static let minimumDelay: TimeInterval = 60
+    static let minimumDelay: TimeInterval = RecurrenceSchedule.minimumSchedulingDelay
 
     static func requestAuthorizationIfNeeded() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
@@ -46,7 +46,9 @@ enum RewardNotifications {
             body: "Open KidsRewards to apply the scheduled allowance.",
             recurrence: settings.allowanceRecurrence,
             lastApplied: settings.lastAllowanceAppliedAt,
-            now: now
+            now: now,
+            weekday: settings.allowanceWeekday,
+            monthDay: settings.allowanceMonthDay
         ) {
             plans.append(allowance)
         }
@@ -69,13 +71,17 @@ enum RewardNotifications {
         recurrence: RewardTask.Recurrence,
         lastApplied: Date?,
         now: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        weekday: Int? = nil,
+        monthDay: Int? = nil
     ) -> TimeInterval? {
         RecurrenceSchedule.delayUntilNextOccurrence(
             recurrence: recurrence,
             lastApplied: lastApplied,
             now: now,
-            calendar: calendar
+            calendar: calendar,
+            weekday: weekday,
+            monthDay: monthDay
         ).map { max($0, minimumDelay) }
     }
 
@@ -118,9 +124,17 @@ enum RewardNotifications {
         body: String,
         recurrence: RewardTask.Recurrence,
         lastApplied: Date?,
-        now: Date
+        now: Date,
+        weekday: Int? = nil,
+        monthDay: Int? = nil
     ) -> RewardNotificationPlan? {
-        guard let delay = recurringDelay(recurrence: recurrence, lastApplied: lastApplied, now: now) else {
+        guard let delay = recurringDelay(
+            recurrence: recurrence,
+            lastApplied: lastApplied,
+            now: now,
+            weekday: weekday,
+            monthDay: monthDay
+        ) else {
             return nil
         }
         return RewardNotificationPlan(

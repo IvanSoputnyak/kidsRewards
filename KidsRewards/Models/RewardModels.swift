@@ -569,7 +569,14 @@ enum RecurrenceSchedule {
         return calendar.dateInterval(of: .weekOfYear, for: date)?.start ?? calendar.startOfDay(for: date)
     }
 
-    static func nextOccurrence(after lastOccurrence: Date?, recurrence: RewardTask.Recurrence, from now: Date, calendar: Calendar = .current) -> Date? {
+    static func nextOccurrence(
+        after lastOccurrence: Date?,
+        recurrence: RewardTask.Recurrence,
+        from now: Date,
+        calendar: Calendar = .current,
+        weekday: Int? = nil,
+        monthDay: Int? = nil
+    ) -> Date? {
         let calendar = configuredCalendar(from: calendar)
         switch recurrence {
         case .none:
@@ -580,17 +587,29 @@ enum RecurrenceSchedule {
             return max(nextDay, now)
         case .weekly:
             let anchor = lastOccurrence ?? now
-            let nextWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
-            return max(nextWeek, now)
+            let nextWeekStart = calendar.date(byAdding: .weekOfYear, value: 1, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
+            if let weekday {
+                var comps = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: nextWeekStart)
+                comps.weekday = weekday
+                let targetDate = calendar.date(from: comps) ?? nextWeekStart
+                return max(targetDate, now)
+            }
+            return max(nextWeekStart, now)
         case .biweekly:
             let anchor = lastOccurrence ?? now
-            let nextBiweek = calendar.date(byAdding: .weekOfYear, value: 2, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
-            return max(nextBiweek, now)
+            let nextBiweekStart = calendar.date(byAdding: .weekOfYear, value: 2, to: startOfWeek(for: anchor, calendar: calendar)) ?? anchor
+            if let weekday {
+                var comps = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: nextBiweekStart)
+                comps.weekday = weekday
+                let targetDate = calendar.date(from: comps) ?? nextBiweekStart
+                return max(targetDate, now)
+            }
+            return max(nextBiweekStart, now)
         case .monthly:
             let anchor = lastOccurrence ?? now
             var comps = calendar.dateComponents([.year, .month], from: anchor)
             comps.month = (comps.month ?? 1) + 1
-            comps.day = 1
+            comps.day = monthDay ?? 1
             let nextMonth = calendar.date(from: comps) ?? anchor
             return max(nextMonth, now)
         }
@@ -600,10 +619,19 @@ enum RecurrenceSchedule {
         recurrence: RewardTask.Recurrence,
         lastApplied: Date?,
         now: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        weekday: Int? = nil,
+        monthDay: Int? = nil
     ) -> TimeInterval? {
         guard recurrence != .none,
-              let nextDate = nextOccurrence(after: lastApplied, recurrence: recurrence, from: now, calendar: calendar) else {
+              let nextDate = nextOccurrence(
+                  after: lastApplied,
+                  recurrence: recurrence,
+                  from: now,
+                  calendar: calendar,
+                  weekday: weekday,
+                  monthDay: monthDay
+              ) else {
             return nil
         }
         return max(nextDate.timeIntervalSince(now), minimumSchedulingDelay)

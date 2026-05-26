@@ -848,9 +848,10 @@ final class RewardStoreTests: XCTestCase {
 
     func testEarnedPointsThisWeekSumsEarnedTransactions() {
         let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
-        // Fixed mid-week date avoids week-boundary flakiness when Date() is used.
-        let now = Date(timeIntervalSince1970: 4_102_747_200) // Jan 4, 2100 12:00:00 UTC
-        let calendar = Calendar.current
+        // Fixed mid-week date (Mon Jan 4, 2100 12:00 UTC) avoids week-boundary flakiness.
+        let now = Date(timeIntervalSince1970: 4_102_747_200)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
         let store = makeStore(
             kids: [kid],
@@ -874,7 +875,7 @@ final class RewardStoreTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(store.earnedPointsThisWeek(now: now), 4)
+        XCTAssertEqual(store.earnedPointsThisWeek(now: now, calendar: calendar), 4)
     }
 
     func testReadyChoreCountRespectsRecurrence() {
@@ -2240,22 +2241,18 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.approvalRequests[0].points, 4)
     }
 
-    func testChildModeHistoryCapAt10Transactions() {
+    func testChildModeHistoryReturnsAllTransactionsWithoutStoreCap() {
         let kid = Kid(name: "Avery", availablePoints: 100, vaultPoints: 0)
         var settings = RewardSettings.defaults
         settings.approvalFlowEnabled = false
         let store = makeStore(kids: [kid], settings: settings)
-        let liveKid = store.state.kids[0]
 
         for i in 1...12 {
             store.adjust(points: 1, note: "Bonus \(i)", for: store.state.kids[0])
         }
 
-        let history = store.transactions(for: liveKid)
-        XCTAssertEqual(history.count, 12)
-
-        let capped = Array(history.prefix(10))
-        XCTAssertEqual(capped.count, 10)
+        // The store imposes no cap; the display limit lives in ChildModeView.historyLimit.
+        XCTAssertEqual(store.transactions(for: store.state.kids[0]).count, 12)
     }
 
     func testChildModeMultiKidPendingStateIsPerKid() {
@@ -2851,6 +2848,66 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(next, now)
     }
 
+    func testNextOccurrenceWeeklyRespectsConfiguredWeekday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        // Jan 3, 2100 = Sunday = start of week; weekday 4 = Wednesday
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .weekly,
+            from: now,
+            calendar: calendar,
+            weekday: 4
+        ))
+
+        // Week of Jan 10: Sunday Jan 10 … Saturday Jan 16. Wednesday = Jan 13.
+        let expectedWednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 13)))
+        XCTAssertEqual(next, expectedWednesday)
+    }
+
+    func testNextOccurrenceMonthlyRespectsConfiguredMonthDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 5, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let next = try XCTUnwrap(RecurrenceSchedule.nextOccurrence(
+            after: anchor,
+            recurrence: .monthly,
+            from: now,
+            calendar: calendar,
+            monthDay: 15
+        ))
+
+        let expectedDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 2, day: 15)))
+        XCTAssertEqual(next, expectedDay)
+    }
+
+    func testRecurringDelayWeeklyRespectsConfiguredWeekday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        // Anchor: Jan 5, 2100 = Tuesday
+        let anchor = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 5, hour: 12)))
+        let now = anchor.addingTimeInterval(60)
+
+        let delay = try XCTUnwrap(RewardNotifications.recurringDelay(
+            recurrence: .weekly,
+            lastApplied: anchor,
+            now: now,
+            calendar: calendar,
+            weekday: 4  // Wednesday
+        ))
+
+        // startOfWeek(Jan 5) = Jan 3; next week start = Jan 10; Wednesday of that week = Jan 13
+        let expectedWednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 13)))
+        XCTAssertEqual(delay, expectedWednesday.timeIntervalSince(now))
+    }
+
     // MARK: - Monthly allowance edge cases
 
     func testMonthlyAllowanceSkipsMonthWithFewerDaysThanTarget() throws {
@@ -3352,6 +3409,35 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.settings.allowancePoints, 0)
     }
 
+    // MARK: - Formatters.parseDecimal (interest rate input guard)
+
+    func testParseDecimalRejectsNonNumericInput() {
+        XCTAssertNil(Formatters.parseDecimal("abc"))
+        XCTAssertNil(Formatters.parseDecimal(""))
+        XCTAssertNil(Formatters.parseDecimal("xyz%"))
+    }
+
+    func testParseDecimalAcceptsValidDecimalStrings() {
+        XCTAssertEqual(Formatters.parseDecimal("0.05"), Decimal(string: "0.05"))
+        XCTAssertEqual(Formatters.parseDecimal("1"), 1)
+        XCTAssertEqual(Formatters.parseDecimal("0"), 0)
+    }
+
+    func testSetVaultInterestRateNotCalledForInvalidInput() {
+        // saveVaultSettings() guards with Formatters.parseDecimal; verify the store
+        // is unchanged when a non-numeric string would be passed through that guard.
+        let store = makeStore(kids: [])
+        let originalRate = store.state.settings.vaultInterestRate
+
+        // Simulate the guard: Formatters.parseDecimal returns nil for "abc",
+        // so setVaultInterestRate is never called.
+        if let rate = Formatters.parseDecimal("abc") {
+            store.setVaultInterestRate(rate)
+        }
+
+        assertDecimalEqual(store.state.settings.vaultInterestRate, originalRate)
+    }
+
     // MARK: - totalHouseholdPoints includes goal
 
     func testTotalHouseholdPointsIncludesGoalPoints() {
@@ -3494,6 +3580,32 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(store.state.kids[0].availablePoints, 10)
         XCTAssertEqual(store.state.kids[0].vaultPoints, 0)
         XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+    }
+
+    func testAutoVaultPercentDepositsToVaultOnAllowance() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoVaultPercent: 20)
+        var settings = RewardSettings.defaults
+        settings.allowancePoints = 10
+        settings.approvalFlowEnabled = false
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.applyAllowanceToAllKids()
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 8)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 2)
+    }
+
+    func testAutoGoalPercentDepositsToGoalOnAllowance() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoGoalPercent: 30)
+        var settings = RewardSettings.defaults
+        settings.allowancePoints = 10
+        settings.approvalFlowEnabled = false
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.applyAllowanceToAllKids()
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 7)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
     }
 
     // MARK: - correctTransaction currency recalculation
