@@ -296,9 +296,8 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var recentActivitySection: some View {
-        let all = store.recentTransactions(limit: 10_000)
-        let total = all.count
-        let visible = Array(all.prefix(activityVisibleCount))
+        let total = store.state.transactions.count
+        let visible = store.recentTransactions(limit: activityVisibleCount)
         let hasMore = activityVisibleCount < total
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -310,7 +309,7 @@ struct DashboardView: View {
                         .foregroundStyle(KidCoinTheme.mutedText)
                 }
             }
-            if all.isEmpty {
+            if visible.isEmpty {
                 Text("Activity from chores, allowance, vault, and cash out will show up here.")
                     .font(.caption)
                     .foregroundStyle(KidCoinTheme.mutedText)

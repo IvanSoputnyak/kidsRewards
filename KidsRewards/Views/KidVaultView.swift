@@ -369,6 +369,11 @@ struct KidVaultView: View {
                     .foregroundStyle(KidCoinTheme.mutedText)
                     .lineSpacing(2)
 
+                if interestRateText != Formatters.decimalInput(store.state.settings.vaultInterestRate) {
+                    Text("Unsaved changes")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 PillButton(title: "Save Interest Settings", systemImage: "checkmark", tone: .subtle) {
                     saveVaultSettings()
                 }

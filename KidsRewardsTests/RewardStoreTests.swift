@@ -653,7 +653,7 @@ final class RewardStoreTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
-        let sunday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 5, hour: 12)))
+        let sunday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 5, hour: 12)))
         let wednesday = try XCTUnwrap(calendar.date(byAdding: .day, value: 3, to: sunday))
         let nextSunday = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: sunday))
 
@@ -848,7 +848,8 @@ final class RewardStoreTests: XCTestCase {
 
     func testEarnedPointsThisWeekSumsEarnedTransactions() {
         let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
-        let now = Date()
+        // Fixed mid-week date avoids week-boundary flakiness when Date() is used.
+        let now = Date(timeIntervalSince1970: 4_102_747_200) // Jan 4, 2100 12:00:00 UTC
         let calendar = Calendar.current
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
         let store = makeStore(
@@ -3429,6 +3430,113 @@ final class RewardStoreTests: XCTestCase {
         XCTAssertEqual(corrected.note, "Corrected")
         XCTAssertEqual(corrected.currencyAmount, 4)
         XCTAssertEqual(store.state.kids[0].goalPoints, 8)
+    }
+
+    // MARK: - applyAutodeposit
+
+    func testAutoVaultPercentDepositsToVaultOnAward() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoVaultPercent: 20)
+        let task = RewardTask(title: "Dishes", points: 10)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.award(task: task, to: kid)
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 8)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 2)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+    }
+
+    func testAutoGoalPercentDepositsToGoalOnAward() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoGoalPercent: 30)
+        let task = RewardTask(title: "Dishes", points: 10)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.award(task: task, to: kid)
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 7)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 0)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
+    }
+
+    func testAutoVaultAndGoalBothActiveOnAward() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoVaultPercent: 20, autoGoalPercent: 30)
+        let task = RewardTask(title: "Dishes", points: 10)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.award(task: task, to: kid)
+
+        // vault: 20% of 10 = 2; goal: 30% of 10 capped at (10 - 2) = 3
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 2)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 5)
+    }
+
+    func testAutoDepositCombinedOver100PercentCapsGoalAtRemainder() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoVaultPercent: 70, autoGoalPercent: 60)
+        let task = RewardTask(title: "Dishes", points: 10)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.award(task: task, to: kid)
+
+        // vault: 70% of 10 = 7; goal: min(60% of 10=6, 10-7=3) = 3
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 7)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 3)
+        XCTAssertEqual(store.state.kids[0].availablePoints, 0)
+    }
+
+    func testAutoDepositZeroPercentsLeavesAllPointsAvailable() {
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0, autoVaultPercent: 0, autoGoalPercent: 0)
+        let task = RewardTask(title: "Dishes", points: 10)
+        let store = makeStore(kids: [kid], tasks: [task])
+
+        store.award(task: task, to: kid)
+
+        XCTAssertEqual(store.state.kids[0].availablePoints, 10)
+        XCTAssertEqual(store.state.kids[0].vaultPoints, 0)
+        XCTAssertEqual(store.state.kids[0].goalPoints, 0)
+    }
+
+    // MARK: - correctTransaction currency recalculation
+
+    func testCorrectCashOutTransactionRecalculatesCurrencyAmount() {
+        let kid = Kid(name: "Avery", availablePoints: 10, vaultPoints: 0)
+        let settings = RewardSettings(currencyCode: "USD", currencyPerPoint: 2, vaultInterestRate: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        store.cashOut(points: 4, for: store.state.kids[0])
+        let transaction = store.transactions(for: store.state.kids[0])[0]
+
+        XCTAssertTrue(store.correctTransaction(transaction, points: 2, note: "Corrected"))
+
+        let corrected = store.transactions(for: store.state.kids[0])[0]
+        XCTAssertEqual(corrected.points, 2)
+        XCTAssertEqual(corrected.note, "Corrected")
+        assertDecimalEqual(corrected.currencyAmount, 4) // 2 points × $2/point
+        XCTAssertEqual(store.state.kids[0].availablePoints, 8) // 10 - 2
+    }
+
+    // MARK: - applyDueAllowanceIfNeeded dedup
+
+    func testApplyDueAllowanceIfNeededSkipsDuplicateApprovalRequest() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = RecurrenceSchedule.calendarWeekFirstWeekday
+        let lastWeek = try XCTUnwrap(calendar.date(from: DateComponents(year: 2100, month: 1, day: 3, hour: 12)))
+        let now = try XCTUnwrap(calendar.date(byAdding: .day, value: 7, to: lastWeek))
+        var settings = RewardSettings.defaults
+        settings.allowancePoints = 4
+        settings.allowanceRecurrence = .weekly
+        settings.approvalFlowEnabled = true
+        settings.lastAllowanceAppliedAt = lastWeek
+        let kid = Kid(name: "Avery", availablePoints: 0, vaultPoints: 0)
+        let store = makeStore(kids: [kid], settings: settings)
+
+        XCTAssertTrue(store.applyDueAllowanceIfNeeded(now: now))
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
+
+        // Second call before approval must not enqueue a duplicate.
+        XCTAssertFalse(store.applyDueAllowanceIfNeeded(now: now))
+        XCTAssertEqual(store.state.approvalRequests.count, 1)
     }
 
     private func makeStore(

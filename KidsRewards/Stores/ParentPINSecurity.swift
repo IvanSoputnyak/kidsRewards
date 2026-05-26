@@ -140,7 +140,7 @@ final class KeychainParentPINManager: ParentPINManaging, @unchecked Sendable {
     }
 
     private func randomSalt() -> Data {
-        var bytes = [UInt8](repeating: 0, count: 16)
+        var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes)
     }
@@ -195,18 +195,35 @@ enum ParentBiometricUnlock {
         return LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
     }
 
-    static func unlock(reason: String, completion: @escaping (Bool) -> Void) {
+    static func unlock(reason: String, completion: @escaping (Bool, String?) -> Void) {
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-            completion(false)
+            completion(false, "Biometric unlock is not available.")
             return
         }
 
-        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+            let message: String? = success ? nil : biometricErrorMessage(for: error)
             DispatchQueue.main.async {
-                completion(success)
+                completion(success, message)
             }
+        }
+    }
+
+    private static func biometricErrorMessage(for error: Error?) -> String {
+        guard let error = error as? LAError else { return "Biometric unlock failed." }
+        switch error.code {
+        case .biometryLockout:
+            return "Too many attempts. Use your device passcode to re-enable Face ID / Touch ID."
+        case .userCancel, .systemCancel, .appCancel:
+            return ""
+        case .biometryNotEnrolled:
+            return "No Face ID / Touch ID is enrolled on this device."
+        case .biometryNotAvailable:
+            return "Biometric unlock is not available."
+        default:
+            return "Biometric unlock failed."
         }
     }
 }

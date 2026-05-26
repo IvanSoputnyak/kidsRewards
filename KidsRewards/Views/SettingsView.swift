@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var iCloudAutoSyncEnabled = false
     @State private var saved = false
     @State private var pinSaved = false
+    @State private var savedResetTask: Task<Void, Never>?
+    @State private var pinSavedResetTask: Task<Void, Never>?
     @State private var exportDocument = RewardStateDocument(data: Data())
     @State private var isExporting = false
     @State private var isImporting = false
@@ -379,7 +381,10 @@ struct SettingsView: View {
         )
         loadSettings()
         saved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+        savedResetTask?.cancel()
+        savedResetTask = Task {
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
             saved = false
         }
     }
@@ -390,7 +395,10 @@ struct SettingsView: View {
             guard await store.updateParentPIN(nextPIN) else { return }
             loadSettings()
             pinSaved = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            pinSavedResetTask?.cancel()
+            pinSavedResetTask = Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                guard !Task.isCancelled else { return }
                 pinSaved = false
             }
         }

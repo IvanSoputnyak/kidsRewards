@@ -12,18 +12,18 @@ enum AppDistribution {
 
 enum ICloudBackup {
     #if DEBUG
-    private(set) static var isAvailableOverride: Bool?
+    private static let overrideLock = NSLock()
+    private static var _isAvailableOverride: Bool?
 
     static func setAvailableForTesting(_ available: Bool?) {
-        isAvailableOverride = available
+        overrideLock.withLock { _isAvailableOverride = available }
     }
     #endif
 
     static var isAvailable: Bool {
         #if DEBUG
-        if let isAvailableOverride {
-            return isAvailableOverride
-        }
+        let override = overrideLock.withLock { _isAvailableOverride }
+        if let override { return override }
         #endif
         return AppDistribution.iCloudKeyValueBackupEnabled
     }

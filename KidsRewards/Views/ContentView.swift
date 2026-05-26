@@ -76,15 +76,15 @@ struct ContentView: View {
                         }
                     },
                     onBiometricUnlock: {
-                        ParentBiometricUnlock.unlock(reason: AppBranding.biometricUnlockReason) { success in
+                        ParentBiometricUnlock.unlock(reason: AppBranding.biometricUnlockReason) { success, errorMessage in
                             if success {
                                 pinEntry = ""
                                 pinError = ""
                                 withAnimation(KidCoinMotion.modal) {
                                     isParentUnlocked = true
                                 }
-                            } else {
-                                pinError = "Biometric unlock failed"
+                            } else if let errorMessage, !errorMessage.isEmpty {
+                                pinError = errorMessage
                             }
                         }
                     },

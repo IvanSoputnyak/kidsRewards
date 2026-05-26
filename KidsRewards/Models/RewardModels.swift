@@ -523,7 +523,7 @@ enum RecurrenceSchedule {
         guard let last = lastApplied else { return recurrence != .none }
         switch recurrence {
         case .none:
-            return true
+            return false
         case .daily:
             return isDue(since: last, recurrence: .daily, now: now, calendar: cal)
         case .weekly:

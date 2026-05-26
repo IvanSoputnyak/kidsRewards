@@ -732,7 +732,7 @@ final class RewardStore: ObservableObject {
         if state.settings.approvalFlowEnabled {
             var queuedAny = false
             for kid in state.kids where allowancePoints(for: kid) > 0 {
-                if requestAllowance(points: allowancePoints(for: kid), for: kid) {
+                if enqueueAllowanceRequest(points: allowancePoints(for: kid), for: kid) {
                     queuedAny = true
                 }
             }
@@ -757,9 +757,7 @@ final class RewardStore: ObservableObject {
             return
         }
         if state.settings.approvalFlowEnabled {
-            if requestAllowance(points: points, for: kid) {
-                save()
-            }
+            requestAllowance(points: points, for: kid)
             return
         }
         applyAllowancePoints(points, toKidAt: index, date: date)
@@ -768,6 +766,13 @@ final class RewardStore: ObservableObject {
 
     @discardableResult
     func requestAllowance(points: Int, for kid: Kid) -> Bool {
+        guard enqueueAllowanceRequest(points: points, for: kid) else { return false }
+        save()
+        return true
+    }
+
+    @discardableResult
+    private func enqueueAllowanceRequest(points: Int, for kid: Kid) -> Bool {
         guard state.settings.approvalFlowEnabled else { return false }
         let amount = max(points, 0)
         guard amount > 0 else { return false }
@@ -777,7 +782,6 @@ final class RewardStore: ObservableObject {
             points: amount,
             note: "Allowance request"
         )
-        save()
         return true
     }
 
@@ -819,7 +823,7 @@ final class RewardStore: ObservableObject {
                 if pendingApprovalRequest(kind: .allowance, kidID: kid.id) != nil {
                     continue
                 }
-                if requestAllowance(points: points, for: kid) {
+                if enqueueAllowanceRequest(points: points, for: kid) {
                     queuedAny = true
                 }
             }
@@ -1443,7 +1447,6 @@ final class RewardStore: ObservableObject {
                 taskID: taskID
             )
         )
-        RewardNotifications.reschedule(using: self)
     }
 
     private func disableICloudBackupIfUnavailable() {
